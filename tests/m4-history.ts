@@ -11,6 +11,7 @@ import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import { Config } from '../src/config.js';
+import { apply } from '../src/index.js';
 import {
   appendHistory,
   computeTrend,
@@ -255,6 +256,56 @@ async function main(): Promise<void> {
 
   const md = await fs.readFile(bothOut.reportPath, 'utf8');
   check('5.11 报告里写明历史文件位置与定时扫描状态', md.includes('历史记录：') && md.includes('定时扫描：'));
+
+  // ---------- 7. 插件 apply 接线：定时器必须交给 ctx.effect 托管 ----------
+  console.log('\n--- 7. apply 接线（假 ctx，验证宿主集成契约）---');
+  let effectCallback: (() => (() => void) | void) | undefined;
+  let effectLabel = '';
+  const applyLogs: string[] = [];
+  const fakeCtx = {
+    tools: { register: () => () => {} },
+    logger: () => ({
+      info: (message: string) => void applyLogs.push(`info:${message}`),
+      warn: (message: string) => void applyLogs.push(`warn:${message}`),
+      error: (message: string) => void applyLogs.push(`error:${message}`),
+      debug: () => {},
+    }),
+    effect: (callback: () => (() => void) | void, label?: string) => {
+      effectCallback = callback;
+      effectLabel = label ?? '';
+      return () => {};
+    },
+  };
+
+  apply(fakeCtx as never, Config({ reportDir: sandbox, historyPath: historyFile, schedule: { enabled: false } }) as never);
+  check('7.1 默认（未启用）时不注册 effect、不建定时器', effectCallback === undefined);
+
+  const enabledConfig = Config({
+    reportDir: sandbox,
+    historyPath: historyFile,
+    schedule: { enabled: true, intervalHours: 24, alertFreePercent: 10, initialDelayMinutes: 600, scope: 'hotspots' },
+  }) as never;
+  apply(fakeCtx as never, enabledConfig);
+  check(
+    '7.2 启用后把定时器的清理交给 ctx.effect（带可读 label）',
+    effectCallback !== undefined && effectLabel.includes('scheduled-scan'),
+    `label=${effectLabel}`,
+  );
+  check(
+    '7.3 启动时经 logger 说明配置与历史文件位置',
+    applyLogs.some((line) => line.startsWith('info:') && line.includes('定时扫描已启用') && line.includes(historyFile)),
+    applyLogs[0]?.slice(0, 80),
+  );
+  const cleanups = effectCallback?.();
+  let cleanupOk = false;
+  try {
+    if (typeof cleanups === 'function') cleanups();
+    else if (cleanups && typeof (cleanups as unknown as Promise<void>).then === 'function') await cleanups;
+    cleanupOk = true;
+  } catch {
+    cleanupOk = false;
+  }
+  check('7.4 effect 的清理函数可安全调用（插件卸载即停表）', cleanupOk);
 
   // ---------- 收尾 ----------
   await fs.rm(sandbox, { recursive: true, force: true });

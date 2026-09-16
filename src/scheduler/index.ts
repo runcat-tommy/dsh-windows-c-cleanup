@@ -48,7 +48,7 @@ export function describeSchedule(options: {
   scope: 'hotspots' | 'full';
 }): string {
   if (!options.enabled) return '未启用（config.schedule.enabled = false）';
-  return `已启用：每 ${options.intervalHours} 小时扫描一次（范围 ${options.scope}，首次延迟 ${options.initialDelayMinutes} 分钟，剩余空间低于 ${options.alertFreePercent}% 时告警）`;
+  return `每 ${options.intervalHours} 小时扫描一次（范围 ${options.scope}，首次延迟 ${options.initialDelayMinutes} 分钟，剩余空间低于 ${options.alertFreePercent}% 时告警）`;
 }
 
 export function createScheduler(options: ScheduleOptions, hooks: SchedulerHooks): Scheduler {
