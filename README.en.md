@@ -97,7 +97,12 @@ The toolbar is laid out as three tight groups, left to right:
 | ② Selection | `<n> selected` + `Clear selection` | Live count and one-click reset |
 | ③ Run | `Delete mode` select + `Preview` + `?` + `Confirm and run` | The `?` help button sits right next to "Preview" |
 
-- **The `?` button** explains in place what a *preview (dry run)* is: it really runs the safety gate and the per-item plan, but touches no data; it also spells out the panel's three hard limits (per-item confirmation, refused items can never be executed, nothing beyond the elevation tasks is escalated).
+**Visual affordance** (deliberately tuned, not the default look):
+
+- The three action buttons "Scan C:", "Clear selection" and "Preview" get a thick brand-coloured outline, a tinted fill, a drop shadow and semi-bold text **while they are enabled**, so they read as buttons at a glance. **While disabled they keep the original flat look** (pale background, grey border, translucent) — a button you cannot press must never be drawn as if you could;
+- "Confirm and run" stays solid brand-coloured: solid means the final action, outlined means an ordinary clickable action, so the hierarchy never blurs;
+- The `?` next to "Preview" is a 24px round button (2px brand outline, tinted fill, bold question mark, grows on hover). Opening it explains in place, in deliberately plain words: the first line is "Clicking Preview runs a dry run — nothing is deleted", then three bullet points (it really checks what may be deleted / it really counts permissions and space / it says what would happen to each item), and only then two caveats (the numbers are estimates, and locked files are invisible to a preview).
+
 - Five-tier cards (🟢 safe / 🟡 caution / 🟠 migrate / 🔴 protected) with path, size and the reason for each verdict; protected entries **cannot be selected**;
 - Two-step execution: the "confirm" button unlocks only after a preview, and any change to the selection or mode invalidates that preview; permanent deletion additionally requires an explicit confirmation tick;
 - Real progress from the host's per-item accounting callback (not parsed log text), with a working "cancel job";

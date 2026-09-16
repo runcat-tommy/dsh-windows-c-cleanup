@@ -47,20 +47,17 @@ const ZH: Record<string, string> = {
   'confirm.hintStale': '勾选或模式已变化，请先重新预演',
   'confirm.hintReady': '按预演过的动作执行',
 
-  'help.preview.title': '预演（dry run）是做什么的？',
+  'help.preview.title': '预演是做什么的？',
   'help.preview.toggle': '预演说明',
   'help.preview.body':
-    '预演会把真执行的流程完整跑一遍，只在最后一步不做破坏性动作——它就是同一个执行器，只是 dryRun 打开：\n' +
-    '· 真跑安全闸：保护名单、越界、不存在、可覆盖性都按真执行同一套判定，被拒的项连理由一起列出；\n' +
-    '· 真算提权：需要管理员权限的项会标出来并计入「提权任务数」，但不会弹 UAC；\n' +
-    '· 真测体积：优先用扫描结果，没有就现场轻量测量（每项 8 秒预算）——会读盘，但只读；\n' +
-    '· 每项给出动作与理由：「将移动到暂存区 …」或「将永久删除（…）」，并汇总计划释放量。\n' +
-    '它绝不会：删文件、移动、建暂存区目录、建目录联接、提权、写台账、写执行报告。\n' +
-    '为什么值得先预演：面板的预演与真执行是同一条代码路径，所以清单里的每一项、每个理由、每个体积，' +
-    '就是点「确认执行」后会发生的事；勾选或删除方式一变，预演立即作废，必须重跑。',
+    '点「预演」= 先干跑一遍，什么都不删。\n' +
+    '· 真的检查每个目录能不能删（保护名单、越界、不存在，都按执行时同一套判断）；\n' +
+    '· 真的算清楚要几项管理员权限、能腾出多少空间；\n' +
+    '· 每一项都写明白：「将移动到暂存区…」还是「将永久删除」，被拒的会说原因。\n' +
+    '看完觉得没问题，再点「确认执行」。',
   'help.preview.limits':
-    '三个诚实的边界：① 预演体积≈但不必然等于真释放量（真跑取盘符空闲净增，可能被其他进程写盘掩盖，报告里两个口径都给）；' +
-    '② 预演不检测文件占用，这类问题只有真删时才暴露；③ 越早执行越准，期间别的进程可能在写盘。',
+    '两点注意：预演报的空间是估算，实际腾出多少，执行完看盘符空闲变化；预演查不出文件被占用，' +
+    '这类问题只有真删时才会冒出来。勾选或删除方式一变，预演作废，要重跑。',
 
   'busy.scan': '正在扫描 C 盘（热点清单，约 1 分钟）…',
   'busy.preview': '正在预演（不删除任何文件）…',
@@ -183,19 +180,17 @@ const EN: Record<string, string> = {
   'confirm.hintStale': 'Selection or mode changed — run the preview again first',
   'confirm.hintReady': 'Run exactly the actions you previewed',
 
-  'help.preview.title': 'What does "preview" (dry run) do?',
+  'help.preview.title': 'What does Preview do?',
   'help.preview.toggle': 'About the preview',
   'help.preview.body':
-    'The preview runs the entire execution pipeline and stops only at the destructive step — it is the same executor with dryRun enabled:\n' +
-    '· The safety gate really runs: protected list, out-of-scope paths, missing paths and overridability are judged exactly as in a real run, and refusals are listed with their reasons;\n' +
-    '· Elevation is really computed: entries needing administrator rights are flagged and counted, but no UAC prompt appears;\n' +
-    '· Sizes are really measured: the scan result is reused when available, otherwise a light on-the-fly measurement runs (8 s budget per item) — it reads the disk, nothing more;\n' +
-    '· Every entry gets an action and a reason ("will move to the staging area …" / "will be deleted permanently (…)"), plus the total planned size.\n' +
-    'It never: deletes files, moves anything, creates the staging area, creates junctions, elevates, writes the ledger or writes an execution report.\n' +
-    'Why bother: the panel previews and executes through the same code path, so what you see — every entry, reason and size — is exactly what "Confirm and run" will do. Changing the selection or the mode invalidates the preview and you must run it again.',
+    'Clicking Preview runs a dry run — nothing is deleted.\n' +
+    '· It really checks whether each folder may be deleted (protected list, out of scope, missing — the same checks a real run uses);\n' +
+    '· It really counts how many admin-level tasks are needed and how much space would be freed;\n' +
+    '· Every item says what would happen: "will move to the staging area…" or "will be deleted permanently", and refusals explain why.\n' +
+    'If the list looks right, click Confirm and run.',
   'help.preview.limits':
-    'Three honest limits: (1) the previewed size is close to but not necessarily equal to the space actually reclaimed (a real run measures the drive\'s free-space delta, which other processes can mask — the report gives both numbers); ' +
-    '(2) the preview does not detect locked files, which only surface during a real deletion; (3) the sooner you run after previewing, the more accurate it is, since other processes may be writing meanwhile.',
+    'Two things to know: preview sizes are estimates — the space really freed is read from the drive after the run; and the preview cannot see ' +
+    'files locked by running apps, which only show up during a real deletion. Change the selection or the mode and the preview is void — run it again.',
 
   'busy.scan': 'Scanning the C: drive (hotspot list, about a minute)…',
   'busy.preview': 'Running the preview (nothing is deleted)…',

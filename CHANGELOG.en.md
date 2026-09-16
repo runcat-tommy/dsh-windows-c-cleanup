@@ -9,17 +9,20 @@
   - **Host text is bilingual too**: every panel RPC carries `locale`, so rule reasons (`src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id), all 12 safety-gate refusals, the executor's per-item planned actions, migration config hints and the scheduler status all come back in the requested language.
   - **Chinese stays the default**: the model tool path never passes `locale`, so its output is unchanged; a missing English entry falls back to the Chinese original and never renders an empty string.
   - Switching the language needs a page refresh only — no `dsh web` restart.
-- **A `?` help button next to "Preview"** that explains in place what a preview is (it really runs the safety gate and the per-item plan but touches no data) and states the panel's three hard limits (per-item confirmation, refused items can never run, nothing is escalated beyond the elevation tasks).
+- **A `?` help button next to "Preview"** that explains in place what a preview is, in deliberately plain words (its first line is "runs a dry run — nothing is deleted").
 
 ### Changed
 
 - **The toolbar is regrouped so related controls sit together**: ① Scope + Scan C: → ② "n selected" + Clear selection → ③ Delete mode + Preview + `?` + Confirm and run.
+- **Affordance of the three action buttons**: "Scan C:", "Clear selection" and "Preview" now use a thick brand-coloured outline, a tinted fill, a drop shadow and semi-bold text **while enabled** (the tint is mixed with theme tokens via `color-mix`, so dark themes work too). Every prominent rule is scoped to `:not(:disabled)`, so the **disabled state keeps the original flat look** — a button you cannot press must never look pressable (checks 7.1–7.3 and 7.8).
+- **The `?` help icon is more prominent**: a 19px thin hollow circle became a 24px round button (2px brand outline, tinted fill, 15px bold question mark, grows on hover).
+- **The help copy is plainer and shorter**: the old "four technical bullets + never-does list + why bother" became three bullets (it really checks what may be deleted / it really counts permissions and space / it says what would happen to each item) plus two caveats in plain words. Chinese body 141 characters, English 452 (checks 7.5–7.7 cap the length and bullet count so it cannot creep back up).
 - **`panelState.scheduler` is now structured** (`{enabled, running, intervalHours, alertFreePercent}`): the host no longer pushes Chinese sentences into the UI; the panel composes the wording per locale.
 
 ### Tests
 
-- `npm run m5` gains section 10 (10 checks): English coverage (all 101 rules + 6 long-term actions, ids strictly aligned), no Han characters in the English file, same id differs per language, Chinese remains the default, missing entries fall back, English safety-gate refusals, locale passed through the RPC endpoint, and whether every rule seen in the last scan has an English version.
-- `npm run m5:client` gains section 5 (15 checks): identical key sets across dictionaries, no Chinese inside English values, placeholder interpolation, the slot declaring its locale namespace, a thunked tab label, a real render in both locales (English must contain no Han characters), rendering without a `t` seat, every call carrying a locale, the three toolbar groups and button order, and the presence plus expanded state of the help button.
+- `npm run m5` gains section 10 (12 checks): English coverage (all 101 rules + 6 long-term actions, ids strictly aligned), no Han characters in the English file, same id differs per language, Chinese remains the default, missing entries fall back, English safety-gate refusals, locale passed through the RPC endpoint, whether every rule seen in the last scan has an English version, `%placeholder%` tokens never dropped, and elevation wording never dropped in translation.
+- `npm run m5:client` gains sections 5–7 (29 checks): identical key sets across dictionaries, no Chinese inside English values, placeholder interpolation, the slot declaring its locale namespace, a thunked tab label, a real render in both locales, rendering without a `t` seat, every call carrying a locale, the three toolbar groups and button order, and the help button's presence plus expanded state; locale-service wiring order (wait for readiness, and the same thunk switching to English immediately); and the affordance rules (prominent styling only while enabled, disabled state untouched, all three buttons carrying it, help-copy length and bullet caps).
 
 ## [0.5.0] — M5: Web GUI cleanup panel
 

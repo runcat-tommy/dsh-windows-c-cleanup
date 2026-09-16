@@ -455,7 +455,7 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
               <option value="full">{t('scope.full')}</option>
             </select>
           </label>
-          <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void runScan()}>
+          <button type="button" className="wcc_btn wcc_btn_action" disabled={busy !== ''} onClick={() => void runScan()}>
             {scan === undefined ? t('action.scan') : t('action.rescan')}
           </button>
         </div>
@@ -464,7 +464,7 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           <span className="wcc_selected">{t('selected', { count: selected.size })}</span>
           <button
             type="button"
-            className="wcc_btn"
+            className="wcc_btn wcc_btn_action"
             disabled={selected.size === 0}
             onClick={() => {
               setSelected(new Set());
@@ -491,7 +491,12 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
               <option value="permanent">{t('mode.permanent')}</option>
             </select>
           </label>
-          <button type="button" className="wcc_btn" disabled={selected.size === 0 || busy !== ''} onClick={() => void runPreview()}>
+          <button
+            type="button"
+            className="wcc_btn wcc_btn_action"
+            disabled={selected.size === 0 || busy !== ''}
+            onClick={() => void runPreview()}
+          >
             {t('action.preview')}
           </button>
           <button

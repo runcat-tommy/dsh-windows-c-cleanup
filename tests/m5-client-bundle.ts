@@ -227,6 +227,8 @@ check(
 
 const component = registered[0]?.component;
 check('5.7 组件是函数组件', typeof component === 'function');
+/** 中文首屏渲染文本（第 7 节要拿它数按钮） */
+let panelTextZh = '';
 
 /** 最小渲染器：展开函数组件与宿主元素，产出可断言的文本（含 className，便于查骨架） */
 function renderToText(node: unknown): string {
@@ -255,6 +257,7 @@ function renderToText(node: unknown): string {
 if (typeof component === 'function') {
   // 平台注入 t seat：两种语言各渲染一次，确认界面真的跟着变
   const zhText = renderToText(component({ t: zhTranslate }));
+  panelTextZh = zhText;
   const enText = renderToText(component({ t: enTranslate }));
   check('5.8 中文环境下渲染出中文界面', zhText.includes('C 盘清理') && zhText.includes('预演') && zhText.includes('确认执行'), zhText.slice(0, 120));
   check(
@@ -291,7 +294,7 @@ if (typeof component === 'function') {
   );
   check(
     '5.15 「预演」旁边有问号说明按钮（点击展开说明）',
-    /class="wcc_help"/.test(zhText) && zhText.includes('aria-expanded="false"') && zhText.includes('预演（dry run）是做什么的？'),
+    /class="wcc_help"/.test(zhText) && zhText.includes('aria-expanded="false"') && zhText.includes('预演是做什么的？'),
     toolbar.slice(0, 60),
   );
 }
@@ -385,6 +388,72 @@ console.log('\n--- 6. 语言服务接入 ---');
     '6.6 面板调用带上语言服务当前的语言（en）',
     localeApiCalls.length > 0 && localeApiCalls.every((call) => (call.payload as { locale?: string })?.locale === 'en'),
     JSON.stringify(localeApiCalls[0]?.payload),
+  );
+}
+
+// ---------- 7. 可辨识度：按钮与说明 icon 的样式（用户可见性要求，回归要守住） ----------
+console.log('\n--- 7. 按钮与说明 icon 的可辨识度 ---');
+{
+  const cssText = source; // bundle 内嵌的就是这份 CSS，断言的就是浏览器真正拿到的东西
+  const actionRules = cssText.match(/\.wcc_btn_action[^{]*\{/g) ?? [];
+  check(
+    '7.1 「扫描/清空选择/预演」用的显眼按钮样式，且每条规则都只在可用时生效',
+    actionRules.length >= 3 && actionRules.every((rule) => rule.includes(':not(:disabled)')),
+    actionRules.join(' '),
+  );
+  const actionBlock = cssText.slice(cssText.indexOf('.wcc_btn_action:not(:disabled){'));
+  check(
+    '7.2 显眼按钮有加粗描边 + 品牌色 + 底色 + 投影（一眼可辨是按钮）',
+    /border:2px solid var\(--dsw-alias-brand-primary/.test(actionBlock) &&
+      /color:var\(--dsw-alias-brand-primary/.test(actionBlock) &&
+      /font-weight:600/.test(actionBlock) &&
+      /box-shadow/.test(actionBlock) &&
+      /color-mix\(in srgb, var\(--dsw-alias-brand-primary/.test(actionBlock),
+    actionBlock.slice(0, 120),
+  );
+  check(
+    '7.3 禁用态外观不变（浅底灰边 + 半透明，不能把"不能点"画成"能点"）',
+    /\.wcc_btn:disabled\{opacity:\.5;cursor:not-allowed\}/.test(cssText) && !/\.wcc_btn_action:disabled/.test(cssText),
+  );
+  const actionButtons = (panelTextZh.match(/class="wcc_btn wcc_btn_action"/g) ?? []).length;
+  check(
+    '7.8 「扫描 C 盘」「清空选择」「预演」三个按钮都挂上了显眼样式',
+    actionButtons === 3,
+    `挂上 ${actionButtons} 个（应为 3）`,
+  );
+  const helpBlock = cssText.slice(cssText.indexOf('.wcc_help{'), cssText.indexOf('.wcc_help_on{'));
+  check(
+    '7.4 问号 icon 更显眼（加大 + 2px 品牌色描边 + 底色淡染 + 加粗 + 投影）',
+    /width:24px;height:24px/.test(helpBlock) &&
+      /border:2px solid var\(--dsw-alias-brand-primary/.test(helpBlock) &&
+      /font-size:15px;font-weight:700/.test(helpBlock) &&
+      /color-mix\(in srgb, var\(--dsw-alias-brand-primary/.test(helpBlock) &&
+      /box-shadow/.test(helpBlock),
+    helpBlock.slice(0, 110),
+  );
+
+  // 说明内容要"简单直白"：条目少、篇幅短、第一句就说清不删东西
+  const zhBody = i18n.DICTS.zh['help.preview.body'] ?? '';
+  const enBody = i18n.DICTS.en['help.preview.body'] ?? '';
+  const zhLimits = i18n.DICTS.zh['help.preview.limits'] ?? '';
+  const enLimits = i18n.DICTS.en['help.preview.limits'] ?? '';
+  check(
+    '7.5 说明够简短（正文 ≤ 4 条、中文 ≤ 200 字、英文 ≤ 460 字符）',
+    (zhBody.match(/·/g) ?? []).length <= 4 &&
+      (enBody.match(/·/g) ?? []).length <= 4 &&
+      zhBody.length <= 200 &&
+      enBody.length <= 460,
+    `zh=${zhBody.length} 字/${(zhBody.match(/·/g) ?? []).length} 条，en=${enBody.length} 字符/${(enBody.match(/·/g) ?? []).length} 条`,
+  );
+  check(
+    '7.6 第一句就直白说清「预演不删任何东西」（中英都如此）',
+    /什么都不删/.test(zhBody) && /nothing is deleted/.test(enBody),
+    `${zhBody.split('\n')[0]} ｜ ${enBody.split('\n')[0]}`,
+  );
+  check(
+    '7.7 注意事项也保留（篇幅压缩了，但两个诚实边界没说丢）',
+    /估算/.test(zhLimits) && /占用/.test(zhLimits) && /estimate/.test(enLimits) && /locked/.test(enLimits),
+    `${zhLimits.slice(0, 40)}…`,
   );
 }
 

@@ -32,10 +32,14 @@ const PANEL_CSS = `
 .wcc_toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .wcc_group{display:flex;align-items:center;gap:6px}
 .wcc_spacer{flex:1}
-.wcc_help{align-self:center;width:19px;height:19px;padding:0;border-radius:50%;
-  border:1px solid var(--dsw-alias-border-l1,#d0d7de);background:transparent;
-  color:var(--dsw-alias-label-secondary,#57606a);font:inherit;font-size:12px;line-height:1;cursor:pointer}
-.wcc_help:hover{border-color:var(--dsw-alias-border-l2,#8250df);color:var(--dsw-alias-label-primary,#1f2328)}
+.wcc_help{align-self:center;width:24px;height:24px;padding:0;border-radius:50%;
+  border:2px solid var(--dsw-alias-brand-primary,#0969da);
+  background:var(--dsw-alias-bg-base,#fff);
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 16%, var(--dsw-alias-bg-base,#fff));
+  color:var(--dsw-alias-brand-primary,#0969da);font:inherit;font-size:15px;font-weight:700;line-height:1;
+  cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.wcc_help:hover{transform:scale(1.06);
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 26%, var(--dsw-alias-bg-base,#fff))}
 .wcc_help_on{background:var(--dsw-alias-brand-primary,#0969da);border-color:transparent;color:#fff}
 .wcc_helpbox{border:1px solid var(--dsw-alias-border-l1,#d0d7de);border-left:3px solid var(--dsw-alias-brand-primary,#0969da);
   border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-subtle,#f6f8fa);
@@ -50,6 +54,21 @@ const PANEL_CSS = `
   border-radius:8px;padding:5px 12px;font:inherit;cursor:pointer}
 .wcc_btn:hover:not(:disabled){border-color:var(--dsw-alias-border-l2,#8250df)}
 .wcc_btn:disabled{opacity:.5;cursor:not-allowed}
+/*
+ * 显眼按钮（扫描 / 清空选择 / 预演）：加粗描边 + 品牌色 + 底色淡染 + 投影，一眼可辨是按钮。
+ * 所有规则都限定 :not(:disabled) —— 不可用时**保持** .wcc_btn 的原样（浅底、灰边、半透明），
+ * 绝不能把"不能点"渲染成"看起来能点"。
+ */
+.wcc_btn_action:not(:disabled){border:2px solid var(--dsw-alias-brand-primary,#0969da);
+  background:var(--dsw-alias-bg-base,#fff);
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 10%, var(--dsw-alias-bg-base,#fff));
+  color:var(--dsw-alias-brand-primary,#0969da);font-weight:600;padding:4px 14px;
+  box-shadow:0 1px 3px rgba(0,0,0,.14)}
+.wcc_btn_action:not(:disabled):hover{
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 20%, var(--dsw-alias-bg-base,#fff));
+  box-shadow:0 2px 6px rgba(0,0,0,.2)}
+.wcc_btn_action:not(:disabled):active{transform:translateY(1px);box-shadow:none;
+  background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 28%, var(--dsw-alias-bg-base,#fff))}
 .wcc_btn_primary{background:var(--dsw-alias-brand-primary,#0969da);border-color:transparent;color:#fff}
 .wcc_btn_tiny{border:1px solid var(--dsw-alias-border-l1,#d0d7de);background:transparent;color:inherit;
   border-radius:6px;padding:1px 7px;font-size:12px;cursor:pointer}
