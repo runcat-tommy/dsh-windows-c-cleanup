@@ -11,6 +11,10 @@
   - Switching the language needs a page refresh only — no `dsh web` restart.
 - **A `?` help button next to "Preview"** that explains in place what a preview is, in deliberately plain words (its first line is "runs a dry run — nothing is deleted").
 
+### Fixed
+
+- **The reason "Confirm and run" is disabled is now written next to the button.** A user reported "I ticked items but cannot click Confirm": the gate itself was right (a preview must come first), but the explanation lived only in `title`, and **a disabled button receives no mouse events in most browsers, so its tooltip never appears**; worse, the old logic reported "selection or mode changed — preview again" even when nothing was ticked at all. The gate is now one pure function `confirmGate()` (`busy` / `no-selection` / `need-preview` / `stale-preview` / `ready`), driving both `disabled` and the visible hint: nothing ticked → "Tick the items you want to clean below first"; ticked but not previewed → "One more step: click Preview so you can see what will happen"; previewed then changed → "Selection or delete mode changed — click Preview again"; ready → "Run exactly the actions you previewed" (checks 8.1–8.8).
+
 ### Changed
 
 - **The toolbar is regrouped so related controls sit together**: ① Scope + Scan C: → ② "n selected" + Clear selection → ③ Delete mode + Preview + `?` + Confirm and run.

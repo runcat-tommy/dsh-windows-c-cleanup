@@ -77,6 +77,12 @@ const PANEL_CSS = `
 .wcc_btn_action:not(:disabled):active{transform:translateY(1px);box-shadow:none;
   background:color-mix(in srgb, var(--dsw-alias-brand-primary,#0969da) 28%, var(--dsw-alias-bg-base,#fff))}
 .wcc_btn_primary{background:var(--dsw-alias-brand-primary,#0969da);border-color:transparent;color:#fff}
+/*
+ * 「确认执行」不可点时的原因必须看得见。
+ * 禁用按钮在多数浏览器里弹不出 title（收不到鼠标事件），只写 tooltip 等于没写。
+ */
+.wcc_confirm_hint{font-size:12px;line-height:1.3;max-width:230px;
+  color:var(--dsw-alias-label-secondary,#57606a)}
 .wcc_btn_tiny{border:1px solid var(--dsw-alias-border-l1,#d0d7de);background:transparent;color:inherit;
   border-radius:6px;padding:1px 7px;font-size:12px;cursor:pointer}
 .wcc_status,.wcc_notice,.wcc_error,.wcc_warn{border-radius:8px;padding:6px 10px}

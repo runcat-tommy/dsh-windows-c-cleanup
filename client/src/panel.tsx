@@ -26,6 +26,27 @@ import { detectLocale, makeTranslate, type Translate } from './i18n.js';
 
 type TierKey = 'safe' | 'caution' | 'migrate' | 'protected';
 
+/**
+ * 「确认执行」的五个门禁状态。
+ *
+ * `no-selection` / `need-preview` / `stale-preview` 三种都不可点，但**原因不同**，
+ * 所以要分开说：以前一律提示"勾选或模式已变化"，用户勾了项目却看到"请重新预演"，无法理解。
+ */
+export type ConfirmGate = 'busy' | 'no-selection' | 'need-preview' | 'stale-preview' | 'ready';
+
+export function confirmGate(input: {
+  selectedCount: number;
+  previewed: boolean;
+  previewFresh: boolean;
+  busy: boolean;
+}): ConfirmGate {
+  if (input.busy) return 'busy';
+  if (input.selectedCount === 0) return 'no-selection';
+  if (!input.previewed) return 'need-preview';
+  if (!input.previewFresh) return 'stale-preview';
+  return 'ready';
+}
+
 const TIERS: Array<{ key: TierKey; icon: string }> = [
   { key: 'safe', icon: '🟢' },
   { key: 'caution', icon: '🟡' },
@@ -410,7 +431,25 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
     return t('chip.scheduler.on', { hours: scheduler.intervalHours, percent: scheduler.alertFreePercent });
   };
 
-  const needPreview = preview === undefined || previewKey !== selectionKey;
+  /**
+   * 「确认执行」的门禁：**必须先预演**，而且预演必须对得上当前的勾选与删除方式。
+   * 抽成纯函数是为了让离线测试能把五个分支逐一钉住（以前这段判断重复写在 disabled 与 title 两处，
+   * 结果"没勾选"时也提示"请重新预演"，误导人）。
+   */
+  const gate = confirmGate({
+    selectedCount: selected.size,
+    previewed: preview !== undefined,
+    previewFresh: preview !== undefined && previewKey === selectionKey,
+    busy: busy !== '',
+  });
+  /** 门禁原因：直接显示在按钮旁边（禁用按钮的 title 在多数浏览器里弹不出来，只写 title 等于没写） */
+  const confirmHintText = (): string => {
+    if (gate === 'no-selection') return t('confirm.hintNoSelection');
+    if (gate === 'need-preview') return t('confirm.hintNeedPreview');
+    if (gate === 'stale-preview') return t('confirm.hintStale');
+    if (gate === 'ready') return t('confirm.hintReady');
+    return '';
+  };
   const system = state?.drives.find((drive) => drive.isSystem);
   const usedBytes = system === undefined ? 0 : Math.max(0, system.totalBytes - system.freeBytes);
 
@@ -519,12 +558,13 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           <button
             type="button"
             className="wcc_btn wcc_btn_primary"
-            disabled={needPreview || selected.size === 0 || busy !== ''}
-            title={needPreview ? t('confirm.hintStale') : t('confirm.hintReady')}
+            disabled={gate !== 'ready'}
+            title={confirmHintText()}
             onClick={() => void startExecute(false)}
           >
             {t('action.confirm')}
           </button>
+          {confirmHintText() === '' ? null : <span className="wcc_confirm_hint">{confirmHintText()}</span>}
         </div>
       </div>
 

@@ -44,8 +44,10 @@ const ZH: Record<string, string> = {
   'action.preview': '预演',
   'action.confirm': '确认执行',
   'action.confirmBytes': '确认执行（{size}）',
-  'confirm.hintStale': '勾选或模式已变化，请先重新预演',
+  'confirm.hintStale': '勾选或删除方式变了，请重新点「预演」',
   'confirm.hintReady': '按预演过的动作执行',
+  'confirm.hintNoSelection': '先在下面勾选要清理的项目',
+  'confirm.hintNeedPreview': '还要先点「预演」——看清会发生什么才能执行',
 
   'help.preview.title': '预演是做什么的？',
   'help.preview.toggle': '预演说明',
@@ -177,8 +179,10 @@ const EN: Record<string, string> = {
   'action.preview': 'Preview',
   'action.confirm': 'Confirm and run',
   'action.confirmBytes': 'Confirm and run ({size})',
-  'confirm.hintStale': 'Selection or mode changed — run the preview again first',
+  'confirm.hintStale': 'Selection or delete mode changed — click Preview again',
   'confirm.hintReady': 'Run exactly the actions you previewed',
+  'confirm.hintNoSelection': 'Tick the items you want to clean below first',
+  'confirm.hintNeedPreview': 'One more step: click Preview so you can see what will happen',
 
   'help.preview.title': 'What does Preview do?',
   'help.preview.toggle': 'About the preview',

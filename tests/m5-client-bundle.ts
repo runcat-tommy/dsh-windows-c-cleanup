@@ -11,6 +11,7 @@
  * 运行：npm run m5:client
  */
 import { readFileSync } from 'node:fs';
+import { confirmGate } from '../client/src/panel.js';
 import { Fragment, createElement, jsxImpl, reactStub, resetHooks } from './helpers/react-stub.js';
 
 const bundlePath = new URL('../client/client.js', import.meta.url);
@@ -481,6 +482,44 @@ console.log('\n--- 7. 按钮与说明 icon 的可辨识度 ---');
     '7.7 注意事项也保留（篇幅压缩了，但两个诚实边界没说丢）',
     /估算/.test(zhLimits) && /占用/.test(zhLimits) && /estimate/.test(enLimits) && /locked/.test(enLimits),
     `${zhLimits.slice(0, 40)}…`,
+  );
+}
+
+// ---------- 8. 「确认执行」的门禁与"为什么不能点" ----------
+console.log('\n--- 8. 「确认执行」门禁 ---');
+{
+  const gateOf = (input: { selectedCount: number; previewed: boolean; previewFresh: boolean; busy?: boolean }): string =>
+    confirmGate({ busy: false, ...input });
+  check('8.1 没勾选 → no-selection（而不是"请重新预演"）', gateOf({ selectedCount: 0, previewed: false, previewFresh: false }) === 'no-selection');
+  check(
+    '8.2 勾了但没预演 → need-preview（这是最常见的困惑来源）',
+    gateOf({ selectedCount: 3, previewed: false, previewFresh: false }) === 'need-preview',
+  );
+  check(
+    '8.3 预演过但勾选/模式变了 → stale-preview',
+    gateOf({ selectedCount: 3, previewed: true, previewFresh: false }) === 'stale-preview',
+  );
+  check('8.4 预演且未变化 → ready（可点）', gateOf({ selectedCount: 3, previewed: true, previewFresh: true }) === 'ready');
+  check('8.5 忙时优先 → busy', confirmGate({ selectedCount: 3, previewed: true, previewFresh: true, busy: true }) === 'busy');
+
+  // 原因必须渲染在界面上：禁用按钮的 title 在多数浏览器里弹不出来
+  const zhText = panelTextZh;
+  check(
+    '8.6 不可点时必须看到原因（首屏未勾选 → 明确提示去勾选）',
+    zhText.includes('class="wcc_confirm_hint"') && zhText.includes('先在下面勾选要清理的项目'),
+    (zhText.match(/class="wcc_confirm_hint">[^<]*/) ?? ['(没有)'as string])[0] ?? '',
+  );
+  check(
+    '8.7 原因文案在中英两套字典里都有（键集合一致由 5.1 兜底）',
+    ['confirm.hintNoSelection', 'confirm.hintNeedPreview', 'confirm.hintStale', 'confirm.hintReady'].every(
+      (key) => (i18n.DICTS.zh[key]?.length ?? 0) > 0 && (i18n.DICTS.en[key]?.length ?? 0) > 0,
+    ),
+  );
+  const hintBlock = source.slice(source.indexOf('.wcc_confirm_hint{'), source.indexOf('.wcc_confirm_hint{') + 160);
+  check(
+    '8.8 提示样式是小字次要色（看得见但不抢眼）',
+    /font-size:12px/.test(hintBlock) && /label-secondary/.test(hintBlock),
+    hintBlock.slice(0, 90),
   );
 }
 
