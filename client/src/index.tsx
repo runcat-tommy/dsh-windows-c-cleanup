@@ -124,6 +124,16 @@ const PANEL_CSS = `
 .wcc_section{border:1px solid var(--dsw-alias-border-l1,#d0d7de);border-radius:10px;padding:10px;display:flex;
   flex-direction:column;gap:6px}
 .wcc_section_title{font-weight:600}
+/*
+ * 功能模块名（每个区块左上角的小标签）。
+ * 存在的理由：面板有好几块（概览/操作区/清理候选/预演结果…），用户需要能指着某一块说话——
+ * 「预演结果那块」比「上面那个框」精确得多。标签样式刻意做成"标签"而不是标题文字，不抢内容。
+ */
+.wcc_module{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:2px 0}
+.wcc_module_name{font-size:11px;font-weight:700;letter-spacing:.03em;padding:2px 8px;border-radius:999px;
+  border:1px solid var(--dsw-alias-border-l1,#d0d7de);background:var(--dsw-alias-bg-subtle,#f6f8fa);
+  color:var(--dsw-alias-label-secondary,#57606a);white-space:nowrap}
+.wcc_module_extra{font-size:12px;color:var(--dsw-alias-label-secondary,#57606a)}
 .wcc_bar{height:6px;border-radius:4px;background:var(--dsw-alias-bg-subtle,#eaeef2);overflow:hidden}
 .wcc_bar_fill{height:100%;background:var(--dsw-alias-brand-primary,#0969da);transition:width .3s ease}
 .wcc_refused{border-top:1px dashed var(--dsw-alias-border-l1,#d0d7de);padding-top:6px}
@@ -131,6 +141,7 @@ const PANEL_CSS = `
 .wcc_longterm summary{cursor:pointer;font-weight:600}
 .wcc_footer{color:var(--dsw-alias-label-secondary,#57606a);font-size:11px;margin-top:auto;padding-top:6px;
   word-break:break-all}
+.wcc_block{display:flex;flex-direction:column;gap:6px}
 `;
 
 interface SlotsLike {

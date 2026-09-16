@@ -95,6 +95,23 @@ Real screenshots (same scan, two UI languages):
 
 The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
 
+#### Module map (every block carries its name as a label)
+
+Top to bottom, each block has a small fixed-name label in its top-left corner (one set per language, guarded by checks 10.1–10.6). **To point at a block, just use its name**:
+
+| Module | Where | What is inside |
+| --- | --- | --- |
+| **Overview** | the header, top of the panel | drive free/total and used percentage; two chips on the right: migration target (letter + free space) and the scheduled-scan switch |
+| **Trend** | under the header (appears once history exists) | time since the previous scan, free-space delta, directories that grew back, space that was reclaimed |
+| **Controls (scan → select → run)** | above the main body | three tight groups with right-pointing arrows between them: ① Scope + Scan C: ② "n selected" + Clear selection ③ Delete mode + Preview + `?` + Confirm and run |
+| **Status & notices** | under the controls | what is running now (⏳), the result notice of the last action, errors, and the warning shown when the scan hit its time budget |
+| **Cleanup candidates (🟢/🟡/🟠/🔴)** | the four cards in the middle | Safe to delete / Delete with care / Better migrated / Protected list, each item with path, size and reason; protected entries cannot be selected |
+| **Long-term protections** | under the cards (collapsible) | the 6 long-term measures where changing settings or habits beats repeated cleanup |
+| **Preview result** | appears under the cards after clicking Preview | what would happen to each item (move to staging / permanent delete / needs elevation / refused), the total that would be freed, and the refusal list; the run buttons sit at the bottom. The dynamic text next to the title is *what this particular preview worked out* |
+| **Run progress** | appears after clicking Confirm and run | job id and status, progress bar (from the host's per-item accounting), item-by-item detail, freed bytes, cancel button |
+| **Migration preview** | appears after clicking a card's "Preview migration" | source → destination mapping, file count, whether the target drive has room, and app config you must change yourself; the migrate buttons sit at the bottom |
+| **Records & artifacts** | the very bottom of the panel | absolute paths of the history ledger and the report directory (reports are written to disk and stay in Chinese) |
+
 The toolbar is laid out as three tight groups with a right-pointing arrow after the first two, left to right:
 
 | Group | Controls | Purpose |

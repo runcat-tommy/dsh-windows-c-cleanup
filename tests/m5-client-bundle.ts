@@ -11,7 +11,7 @@
  * 运行：npm run m5:client
  */
 import { readFileSync } from 'node:fs';
-import { confirmGate, noticeText, type Notice } from '../client/src/panel.js';
+import { MODULES, confirmGate, noticeText, type Notice } from '../client/src/panel.js';
 import { Fragment, createElement, jsxImpl, reactStub, resetHooks } from './helpers/react-stub.js';
 
 const bundlePath = new URL('../client/client.js', import.meta.url);
@@ -248,7 +248,7 @@ function renderToText(node: unknown): string {
   const inner = childNodes.map(renderToText).join('');
   const className = typeof props.className === 'string' ? ` class="${props.className}"` : '';
   // 把无障碍/提示类属性也渲染出来：测试要能断言「问号按钮」的存在与展开状态
-  const extra = ['title', 'aria-expanded', 'aria-label', 'aria-hidden', 'disabled']
+  const extra = ['title', 'aria-expanded', 'aria-label', 'aria-hidden', 'disabled', 'data-module']
     .filter((key) => props[key] !== undefined && (props[key] !== false || key.startsWith('aria-')))
     .map((key) => ` ${key}="${String(props[key])}"`)
     .join('');
@@ -550,6 +550,56 @@ console.log('\n--- 9. 提示句的语言跟随 ---');
   check(
     '9.6 语言变化时会向宿主重取缓存视图（scan-view），而不是要求用户重扫',
     /api\.scanView\(\)/.test(source) && /\[api, t\]/.test(source.replace(/\s+/g, ' ')),
+  );
+}
+
+// ---------- 10. 功能模块名（用户据此定位功能区） ----------
+console.log('\n--- 10. 功能模块名 ---');
+{
+  const modules = [...MODULES];
+  check(
+    '10.1 每个功能模块都有名字：中英字典各 10 条 module.* 且不为空',
+    modules.length === 10 &&
+      modules.every((id) => (i18n.DICTS.zh[`module.${id}`]?.length ?? 0) > 0 && (i18n.DICTS.en[`module.${id}`]?.length ?? 0) > 0),
+    modules.map((id) => `${id}=${i18n.DICTS.zh[`module.${id}`]}`).join(' ｜ '),
+  );
+  check(
+    '10.2 英文模块名不含中文，且中英不同（不是把中文抄过去）',
+    modules.every((id) => {
+      const zh = i18n.DICTS.zh[`module.${id}`] ?? '';
+      const en = i18n.DICTS.en[`module.${id}`] ?? '';
+      return !/\p{Script=Han}/u.test(en.replace(/[🟢🟡🟠🔴]/gu, '')) && zh !== en;
+    }),
+  );
+  const alwaysOn = ['overview', 'toolbar', 'status', 'artifacts'] as const;
+  const body = panelTextZh;
+  const at = (id: string): number => body.indexOf(`data-module="${id}"`);
+  const countOf = (id: string): number => (body.match(new RegExp(`data-module="${id}"`, 'g')) ?? []).length;
+  check(
+    '10.3 常驻模块的标签按位置出现且各一次（概览 → 操作区 → 状态与提示 → 记录与产物）',
+    alwaysOn.every((id, index) => at(id) >= 0 && countOf(id) === 1 && (index === 0 || at(id) > at(alwaysOn[index - 1]!))),
+    alwaysOn.map((id) => `${id}@${at(id)}`).join(' '),
+  );
+  const conditional = ['trend', 'candidates', 'longterm', 'preview', 'progress', 'migration'] as const;
+  check(
+    '10.4 没有数据时不空挂模块标题（历史对比/清理候选/长期防护/预演/进度/迁移都不出现）',
+    conditional.every((id) => at(id) === -1),
+    conditional.filter((id) => at(id) >= 0).join(',') || '都不出现（符合预期）',
+  );
+  const readmeZh = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
+  const readmeEn = readFileSync(new URL('../README.en.md', import.meta.url), 'utf8');
+  const missingZh = modules.filter((id) => !readmeZh.includes(i18n.DICTS.zh[`module.${id}`] ?? '\u0000'));
+  const missingEn = modules.filter((id) => !readmeEn.includes(i18n.DICTS.en[`module.${id}`] ?? '\u0000'));
+  check(
+    '10.5 README 双语的功能区对照表列出了全部模块名（文档与界面不脱节）',
+    missingZh.length === 0 && missingEn.length === 0,
+    `README.md 缺：${missingZh.join(',') || '无'}｜README.en.md 缺：${missingEn.join(',') || '无'}`,
+  );
+  const titleCss = source.slice(source.indexOf('.wcc_module_name{'), source.indexOf('.wcc_module_name{') + 320);
+  check(
+    '10.6 模块名样式是小标签而不是大标题（不抢内容视线）',
+    /font-size:11px/.test(titleCss) && /border-radius:999px/.test(titleCss) && /label-secondary/.test(titleCss),
+    titleCss.slice(0, 100),
   );
 }
 

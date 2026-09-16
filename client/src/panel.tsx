@@ -27,6 +27,35 @@ import { detectLocale, makeTranslate, type Translate } from './i18n.js';
 type TierKey = 'safe' | 'caution' | 'migrate' | 'protected';
 
 /**
+ * 面板里的**功能模块名**（0.5.1 补）。
+ *
+ * 每个区块左上角都挂一个固定名字的标签，用户可以直接指着说「预演结果那块」，
+ * 不用描述位置。名字同时写进 README 的「功能区对照表」，两边由测试对齐（10.1–10.4）。
+ */
+export const MODULES = [
+  'overview',
+  'trend',
+  'toolbar',
+  'status',
+  'candidates',
+  'longterm',
+  'preview',
+  'progress',
+  'migration',
+  'artifacts',
+] as const;
+export type ModuleKey = (typeof MODULES)[number];
+
+function ModuleTitle({ id, extra, t }: { id: ModuleKey; extra?: string; t: Translate }): JSX.Element {
+  return (
+    <div className="wcc_module" data-module={id}>
+      <span className="wcc_module_name">{t(`module.${id}`)}</span>
+      {extra === undefined || extra === '' ? null : <span className="wcc_module_extra">{extra}</span>}
+    </div>
+  );
+}
+
+/**
  * 「确认执行」的五个门禁状态。
  *
  * `no-selection` / `need-preview` / `stale-preview` 三种都不可点，但**原因不同**，
@@ -552,6 +581,7 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
     <div className="wcc_panel">
       <header className="wcc_head">
         <div>
+          <ModuleTitle id="overview" t={t} />
           <div className="wcc_title">{t('title')}</div>
           <div className="wcc_sub">
             {system === undefined
@@ -577,11 +607,18 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
         </div>
       </header>
 
-      {state?.trend === undefined ? null : <TrendLine trend={state.trend} t={t} />}
+      {state?.trend === undefined ? null : (
+        <div className="wcc_block">
+          <ModuleTitle id="trend" t={t} />
+          <TrendLine trend={state.trend} t={t} />
+        </div>
+      )}
 
       {/* 三组相邻按钮：①范围+扫描 → ②已选+清空 → ③删除方式+预演+说明+确认执行
           组后各有一个向右箭头，标明「先扫描 → 再选择 → 最后执行」的先后关系（纯装饰，读屏会跳过） */}
-      <div className="wcc_toolbar">
+      <div className="wcc_block">
+        <ModuleTitle id="toolbar" t={t} />
+        <div className="wcc_toolbar">
         <div className="wcc_group">
           <label className="wcc_field">
             {t('scope.label')}
@@ -661,6 +698,7 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           </button>
           {confirmHintText() === '' ? null : <span className="wcc_confirm_hint">{confirmHintText()}</span>}
         </div>
+        </div>
       </div>
 
       {helpOpen ? (
@@ -674,9 +712,18 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
         </div>
       ) : null}
 
-      {busy !== '' ? <div className="wcc_status">⏳ {busy}</div> : null}
-      {notice === undefined ? null : <div className="wcc_notice">{noticeText(notice, t)}</div>}
-      {error !== '' ? <div className="wcc_error">⚠️ {error}</div> : null}
+      <div className="wcc_block">
+        <ModuleTitle id="status" t={t} />
+        {busy !== '' ? <div className="wcc_status">⏳ {busy}</div> : null}
+        {notice === undefined ? null : <div className="wcc_notice">{noticeText(notice, t)}</div>}
+        {error !== '' ? <div className="wcc_error">⚠️ {error}</div> : null}
+        {scan !== undefined && scan.partial ? (
+          <div className="wcc_warn">
+            {t('warn.partial')}
+            {scan.partialReasons.length > 0 ? t('warn.partialReasons', { reasons: scan.partialReasons.join('；') }) : ''}
+          </div>
+        ) : null}
+      </div>
 
       {scan === undefined ? (
         <div className="wcc_empty_panel">
@@ -694,48 +741,52 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
         </div>
       ) : (
         <>
-          {scan.partial ? (
-            <div className="wcc_warn">
-              {t('warn.partial')}
-              {scan.partialReasons.length > 0 ? t('warn.partialReasons', { reasons: scan.partialReasons.join('；') }) : ''}
+          <div className="wcc_block">
+            <ModuleTitle id="candidates" t={t} />
+            <div className="wcc_cards">
+              {TIERS.map((tier) => (
+                <TierCard
+                  key={tier.key}
+                  tier={tier.key}
+                  icon={tier.icon}
+                  group={scan.groups[tier.key]}
+                  selected={selected}
+                  t={t}
+                  onToggle={toggle}
+                  onSelectTier={selectTier}
+                  onMigrate={(path) => void runMigratePreview([path])}
+                />
+              ))}
             </div>
-          ) : null}
-          <div className="wcc_cards">
-            {TIERS.map((tier) => (
-              <TierCard
-                key={tier.key}
-                tier={tier.key}
-                icon={tier.icon}
-                group={scan.groups[tier.key]}
-                selected={selected}
-                t={t}
-                onToggle={toggle}
-                onSelectTier={selectTier}
-                onMigrate={(path) => void runMigratePreview([path])}
-              />
-            ))}
           </div>
 
           {scan.longTerm.length === 0 ? null : (
-            <details className="wcc_longterm">
-              <summary>{t('longterm.summary', { count: scan.longTerm.length })}</summary>
-              {scan.longTerm.map((action) => (
-                <div key={action.id} className="wcc_row_main">
-                  <div className="wcc_row_path">{action.title}</div>
-                  <div className="wcc_row_reason">{action.detail}</div>
-                </div>
-              ))}
-            </details>
+            <div className="wcc_block">
+              <ModuleTitle id="longterm" t={t} />
+              <details className="wcc_longterm">
+                <summary>{t('longterm.summary', { count: scan.longTerm.length })}</summary>
+                {scan.longTerm.map((action) => (
+                  <div key={action.id} className="wcc_row_main">
+                    <div className="wcc_row_path">{action.title}</div>
+                    <div className="wcc_row_reason">{action.detail}</div>
+                  </div>
+                ))}
+              </details>
+            </div>
           )}
         </>
       )}
 
       {preview === undefined ? null : (
         <section className="wcc_section">
-          <div className="wcc_section_title">
-            {t('preview.title', { size: formatBytes(preview.plannedBytes), count: preview.items.length })}
-            {preview.trashPath === undefined ? '' : t('preview.trashPath', { path: preview.trashPath })}
-          </div>
+          <ModuleTitle
+            id="preview"
+            t={t}
+            extra={
+              t('preview.title', { size: formatBytes(preview.plannedBytes), count: preview.items.length }) +
+              (preview.trashPath === undefined ? '' : t('preview.trashPath', { path: preview.trashPath }))
+            }
+          />
           {preview.warnings.map((warning) => (
             <div key={warning} className="wcc_warn">
               ⚠️ {warning}
@@ -792,9 +843,11 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
 
       {migration === undefined ? null : (
         <section className="wcc_section">
-          <div className="wcc_section_title">
-            {t('migration.title', { root: migration.targetRoot, free: formatBytes(migration.targetFreeBytes) })}
-          </div>
+          <ModuleTitle
+            id="migration"
+            t={t}
+            extra={t('migration.title', { root: migration.targetRoot, free: formatBytes(migration.targetFreeBytes) })}
+          />
           {migration.warnings.map((warning) => (
             <div key={warning} className="wcc_warn">
               ⚠️ {warning}
@@ -834,11 +887,15 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
 
       {job === undefined ? null : (
         <section className="wcc_section">
-          <div className="wcc_section_title">
-            {job.dryRun ? t('job.titleDry') : t('job.titleReal')} {job.jobId} ｜{' '}
-            {STATUS_KEY[job.status] === undefined ? job.status : t(STATUS_KEY[job.status] as string)}
-            {job.reportPath === undefined ? '' : t('job.report', { path: job.reportPath })}
-          </div>
+          <ModuleTitle
+            id="progress"
+            t={t}
+            extra={
+              `${job.dryRun ? t('job.titleDry') : t('job.titleReal')} ${job.jobId} ｜ ` +
+              `${STATUS_KEY[job.status] === undefined ? job.status : t(STATUS_KEY[job.status] as string)}` +
+              (job.reportPath === undefined ? '' : t('job.report', { path: job.reportPath }))
+            }
+          />
           <div className="wcc_bar">
             <div
               className="wcc_bar_fill"
@@ -883,7 +940,8 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
       )}
 
       <footer className="wcc_footer">
-        {t('footer.paths', { history: state?.historyPath ?? '…', report: state?.reportDir ?? '…' })}
+        <ModuleTitle id="artifacts" t={t} />
+        <div>{t('footer.paths', { history: state?.historyPath ?? '…', report: state?.reportDir ?? '…' })}</div>
       </footer>
     </div>
   );

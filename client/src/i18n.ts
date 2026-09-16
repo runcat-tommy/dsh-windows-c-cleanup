@@ -31,6 +31,18 @@ const ZH: Record<string, string> = {
   'trend.line': '📈 与上次扫描（{hours} 小时前）：剩余空间 {sign}{delta} ｜ 长回来 {grown} 项 ｜ 被释放 {shrunk} 项',
   'trend.grownRow': '＋{delta}　{path}',
 
+  // 功能模块名（面板每个区块左上角的标签；README「功能区对照表」与测试 10.1–10.4 对齐这套名字）
+  'module.overview': '概览',
+  'module.trend': '历史对比',
+  'module.toolbar': '操作区（扫描 → 选择 → 执行）',
+  'module.status': '状态与提示',
+  'module.candidates': '清理候选（🟢/🟡/🟠/🔴）',
+  'module.longterm': '长期防护',
+  'module.preview': '预演结果',
+  'module.progress': '执行进度',
+  'module.migration': '迁移预览',
+  'module.artifacts': '记录与产物',
+
   'scope.label': '范围',
   'scope.hotspots': '热点清单（快）',
   'scope.full': '热点 + 全盘 Top-N（慢）',
@@ -44,8 +56,7 @@ const ZH: Record<string, string> = {
   'action.preview': '预演',
   'action.confirm': '确认执行',
   'action.confirmBytes': '确认执行（{size}）',
-  'confirm.hintStale': '勾选或删除方式变了，请重新点「预演」',
-  'confirm.hintReady': '按预演过的动作执行',
+  'confirm.hintStale': '勾选或删除方式变了，请重新点「预演」',  'confirm.hintReady': '按预演过的动作执行',
   'confirm.hintNoSelection': '先在下面勾选要清理的项目',
   'confirm.hintNeedPreview': '还要先点「预演」——看清会发生什么才能执行',
 
@@ -166,6 +177,18 @@ const EN: Record<string, string> = {
   'chip.scheduler.on': 'Scheduled scan: every {hours} h, alert below {percent}%',
   'trend.line': '📈 Since the previous scan ({hours} h ago): free space {sign}{delta} ｜ grew back {grown} ｜ reclaimed {shrunk}',
   'trend.grownRow': '+{delta}　{path}',
+
+  // Module names (the label at the top-left of every block; the README "module map" and checks 10.1–10.4 track these)
+  'module.overview': 'Overview',
+  'module.trend': 'Trend',
+  'module.toolbar': 'Controls (scan → select → run)',
+  'module.status': 'Status & notices',
+  'module.candidates': 'Cleanup candidates (🟢/🟡/🟠/🔴)',
+  'module.longterm': 'Long-term protections',
+  'module.preview': 'Preview result',
+  'module.progress': 'Run progress',
+  'module.migration': 'Migration preview',
+  'module.artifacts': 'Records & artifacts',
 
   'scope.label': 'Scope',
   'scope.hotspots': 'Hotspot list (fast)',
