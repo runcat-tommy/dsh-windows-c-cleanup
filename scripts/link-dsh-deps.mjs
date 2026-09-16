@@ -22,8 +22,12 @@ const scopeDir = path.join(projectRoot, 'node_modules', '@deepseek-ai');
 const candidates = [
   process.argv[2],
   process.env.DSH_INSTALL_DIR,
+  // 与当前 node 同级的全局安装（nvm-windows / 官方安装包都落在这种布局里）
   path.join(path.dirname(process.execPath), 'node_modules', '@deepseek-ai', 'dsh'),
-  'C:\\Users\\99148\\AppData\\Local\\nvm\\v22.18.0\\node_modules\\@deepseek-ai\\dsh',
+  // nvm-windows 的默认安装根：<NVM_HOME>\v<版本>\node_modules
+  ...(process.env.NVM_HOME === undefined
+    ? []
+    : [path.join(process.env.NVM_HOME, `v${process.versions.node}`, 'node_modules', '@deepseek-ai', 'dsh')]),
 ].filter((entry) => typeof entry === 'string' && entry.length > 0);
 
 const dshRoot = candidates.find((entry) => existsSync(path.join(entry, 'package.json')));
