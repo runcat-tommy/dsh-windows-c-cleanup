@@ -142,6 +142,14 @@ async function main(): Promise<void> {
     (dryRunResult.execution?.plannedBytes ?? 0) >= sizeA * 0.9,
     `plannedBytes=${dryRunResult.execution?.plannedBytes} expected≈${sizeA}`,
   );
+  // 宿主实测教训：执行层曾把 `${systemDrive}\\` 拼成 `C\`（模板字面量里 \\ 只是一个反斜杠，丢了冒号），
+  // statfs 抛 ENOENT 被 catch 吞掉后返回 0，报告写出「系统盘 C 空闲 0.00 GB」。
+  check(
+    '2.2a 预演输出里的系统盘空闲是真实数字（不是脏 catch 出来的 0）',
+    (dryRunResult.freeBytes ?? 0) > 1024 ** 3 &&
+      (dryRunResult.usedBytes ?? 0) + (dryRunResult.freeBytes ?? 0) <= (dryRunResult.totalBytes ?? 0) + 1024 ** 2,
+    `free=${((dryRunResult.freeBytes ?? 0) / 1024 ** 3).toFixed(2)} GB ｜ total=${((dryRunResult.totalBytes ?? 0) / 1024 ** 3).toFixed(2)} GB`,
+  );
 
   const cautionResult = await call({ action: 'apply', grade: 'caution' });
   check(

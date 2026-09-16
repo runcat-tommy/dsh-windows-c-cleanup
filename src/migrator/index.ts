@@ -15,6 +15,7 @@ import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import { freeSpaceOf } from '../scanner/drives.js';
 import { measurePath } from '../scanner/size.js';
+import { driveRoot } from '../util/drive.js';
 import { formatBytes, nowStamp } from '../util/format.js';
 
 export type MigrateMethod = 'junction' | 'app-config';
@@ -169,7 +170,7 @@ export async function migrateByJunction(source: string, options: MigrateOptions)
     return { ...base, status: 'destination-exists' };
   }
 
-  const room = await hasRoomFor(`${driveOf(destination).toUpperCase()}\\`, measured.sizeBytes);
+  const room = await hasRoomFor(driveRoot(driveOf(destination)), measured.sizeBytes);
   if (!room.ok) {
     errors.push(
       `目标盘空间不足：需要 ${formatBytes(measured.sizeBytes * 1.05)}，可用 ${formatBytes(room.freeBytes)}`,
@@ -300,7 +301,7 @@ export async function rollbackMigration(entry: MigrationEntry, options: { dryRun
 
   // 2) 空间检查后搬回
   const measured = await measurePath(entry.destination, { timeBudgetMs: 120_000, signal: options.signal });
-  const room = await hasRoomFor(`${driveOf(entry.source).toUpperCase()}\\`, measured.sizeBytes);
+  const room = await hasRoomFor(driveRoot(driveOf(entry.source)), measured.sizeBytes);
   if (!room.ok) {
     errors.push(`系统盘空间不足，无法搬回（需要 ${formatBytes(measured.sizeBytes * 1.05)}，可用 ${formatBytes(room.freeBytes)}）`);
     return { ...base, status: 'insufficient-space' };

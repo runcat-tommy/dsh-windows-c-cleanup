@@ -1,5 +1,20 @@
 # Changelog
 
+## [0.4.2] — drive-root concatenation fixed structurally, plus a report-directory field correction
+
+### Fixed
+
+- **String-built drive roots bit us a third time, so this is now fixed structurally.** Measured in the host: an `apply` dry run reported "system drive C: **0.00 GB** free". The cause was `` const root = `${systemDrive}\\` `` in the executor — inside a template literal `\\` is a single backslash, so it built **`C\` (the colon was lost)**, `fs.statfs` threw `ENOENT`, the catch swallowed it and returned 0, and the report turned "unreadable" into "0.00 GB".
+  The same missing colon made the recycle-bin check (`` `${systemDrive.toLowerCase()}\\$recycle.bin` `` → `c\$recycle.bin`) never match the real `c:\$recycle.bin`, so that special branch **silently stopped working**.
+  This is the third instance of the same class of bug (M3 had `D::\`, this one is `C\` twice), so instead of patching call sites again, `src/util/drive.ts` now owns `driveRoot()` / `driveLetterOf()` / `sameDrive()`, and the executor, scanner, migrator and tool all go through it.
+- **Zero no longer masquerades as "unknown"**: `freeSpaceOf()` normalizes its input, retries once and logs a warning; the report prints "unknown (statfs failed)" instead of 0.00 GB; and the tool falls back to the drive free space from the scan when the measurement fails — never a fabricated number.
+- **Report directory field corrected**: 0.4.1 read `exec.agent.session.meta.cwd`, which resolves to nothing (so it silently fell back to the host cwd). The real field is `session.header.cwd` (dsh-session's `SessionHeader`); the plugin now reads that, keeping `meta` as a fallback.
+
+### Tests
+
+- `npm run m2` gains 2.2a: the dry-run output's system-drive free space must be a real number (a returning missing colon turns this red immediately).
+- `npm run m4` gains 10.1–10.5: `C` / `C:` / `c:\` / `C:\` / padded / bare letters all normalize to `X:\`, and a normalized `freeSpaceOf` reads a real > 0 figure; 9.2a covers the `session.meta.cwd` fallback.
+
 ## [0.4.1] — fixes found by running in the real host (lossless JSON output / report directory)
 
 ### Fixed

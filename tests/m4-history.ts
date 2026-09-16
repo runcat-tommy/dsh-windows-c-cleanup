@@ -23,6 +23,8 @@ import {
 } from '../src/history/index.js';
 import { JSON_REPORT_SCHEMA } from '../src/report/json.js';
 import { createScheduler, describeSchedule } from '../src/scheduler/index.js';
+import { freeSpaceOf } from '../src/scanner/drives.js';
+import { driveLetterOf, driveRoot, sameDrive } from '../src/util/drive.js';
 import { optionalFields, outputDir, registerDiskCleanupTool } from '../src/tools/disk-cleanup.js';
 import type { HistoryEntry } from '../src/history/index.js';
 
@@ -384,9 +386,16 @@ async function main(): Promise<void> {
   check('9.1 显式 reportDir 最优先', outputDir({ reportDir: 'D:\\x' } as never) === 'D:\\x');
   const withSession = outputDir({} as never, {
     signal: new AbortController().signal,
-    agent: { session: { meta: { cwd: 'D:\\ws' } } },
+    agent: { session: { header: { cwd: 'D:\\ws' } } },
   } as never);
-  check('9.2 未配 reportDir 时用会话工作目录（实测宿主 cwd 是用户主目录）', withSession === 'D:\\ws', withSession);
+  check('9.2 未配 reportDir 时用会话工作目录（真实字段是 session.header.cwd）', withSession === 'D:\\ws', withSession);
+  check(
+    '9.2a 兼容 session.meta.cwd 的历史写法',
+    outputDir({} as never, {
+      signal: new AbortController().signal,
+      agent: { session: { meta: { cwd: 'D:\\legacy' } } },
+    } as never) === 'D:\\legacy',
+  );
   check(
     '9.3 取不到会话目录时退化到宿主 cwd，不抛错',
     outputDir({} as never, { signal: new AbortController().signal } as never) === process.cwd(),
@@ -396,6 +405,27 @@ async function main(): Promise<void> {
     outputDir({} as never, { signal: new AbortController().signal, agent: { session: { meta: {} } } } as never) ===
       process.cwd(),
   );
+
+  // ---------- 10. 盘符路径归一化（这一类 bug 已犯三次，必须钉住） ----------
+  console.log('\n--- 10. 盘符归一化 driveRoot()（缺冒号会让 statfs 静默返回 0）---');
+  const variants = ['C', 'C:', 'c:\\', 'C:\\', ' C ', 'z'];
+  const normalized = variants.map((v) => driveRoot(v));
+  check(
+    '10.1 裸盘符 / 带冒号 / 带反斜杠 / 带空格 全部归一成 `X:\\`',
+    normalized.join('|') === 'C:\\|C:\\|C:\\|C:\\|C:\\|Z:\\',
+    normalized.join(' | '),
+  );
+  check('10.2 归一化结果永远形如 `X:\\`（历史上的 `C\\` 就是漏了冒号）', normalized.every((p) => /^[A-Z]:\\$/.test(p)));
+  check(
+    '10.3 driveLetterOf / sameDrive 容忍混写',
+    driveLetterOf('C:\\Users') === 'C' &&
+      driveLetterOf('d:/x') === 'D' &&
+      sameDrive('C', 'c:\\') &&
+      !sameDrive('C', 'D:\\'),
+  );
+  const freeOnRoot = await freeSpaceOf(driveRoot('C'));
+  check('10.4 freeSpaceOf 用归一化路径读到真实空闲（> 0）', freeOnRoot > 0, `${(freeOnRoot / 1024 ** 3).toFixed(2)} GB`);
+  check('10.5 freeSpaceOf 也接受裸盘符 `C`', (await freeSpaceOf('C')) > 0);
 
   // ---------- 收尾 ----------
   await fs.rm(sandbox, { recursive: true, force: true });

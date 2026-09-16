@@ -40,8 +40,9 @@ export function renderExecutionReport(report: ExecuteReport): string {
     `- 模式：**${MODE_LABEL[report.mode] ?? report.mode}** ｜ dryRun：**${report.dryRun ? '是（未改动任何数据）' : '否'}**`,
   );
   if (report.trashPath) lines.push(`- 暂存区：\`${report.trashPath}\``);
+  const freeText = (bytes: number): string => (bytes > 0 ? formatGB(bytes) : '未知（statfs 读取失败）');
   lines.push(
-    `- 系统盘 ${report.systemDrive} 空闲：${formatGB(report.freeBeforeBytes)} → ${formatGB(report.freeAfterBytes)}` +
+    `- 系统盘 ${report.systemDrive} 空闲：${freeText(report.freeBeforeBytes)} → ${freeText(report.freeAfterBytes)}` +
       (report.dryRun ? '（dryRun 不产生变化）' : `，**盘符空闲净增 ${formatBytes(report.freedBytes)}**`),
   );
   if (!report.dryRun) {

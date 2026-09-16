@@ -53,6 +53,7 @@ import type { DriveInfo, RuleSet } from '../rules/schema.js';
 import { freeSpaceOf, listDrives, pickMigrationTarget } from '../scanner/drives.js';
 import { scanSystem } from '../scanner/index.js';
 import { formatBytes, formatGB, nowStamp, shortPath } from '../util/format.js';
+import { driveRoot } from '../util/drive.js';
 
 const ACTIONS = ['scan', 'plan', 'apply', 'migrate', 'rollback', 'trash'] as const;
 type Action = (typeof ACTIONS)[number];
@@ -212,12 +213,16 @@ export function optionalFields(input: {
  *
  * 优先用**会话工作目录**（用户正在看的那个目录），而不是宿主的 `process.cwd()`
  * ——实测宿主 cwd 是用户主目录，报告会掉进 `C:\Users\<你>\` 而不是工作区。
- * 会话目录取值走 `exec.agent.session.meta.cwd`（dsh-agent 的会话元数据），
+ * 会话目录取值走 `exec.agent.session.header.cwd`（dsh-session 的会话头元数据；
+ * 实测写成 `session.meta.cwd` 是取不到的，会静默退化），
  * 任何一环缺失都退化到宿主 cwd，绝不因为取不到路径而失败。
  */
 export function outputDir(config: Config, exec?: ToolRunContext): string {
   if (config.reportDir) return config.reportDir;
-  const sessionCwd = (exec?.agent as { session?: { meta?: { cwd?: unknown } } } | undefined)?.session?.meta?.cwd;
+  const session = (exec?.agent as { session?: { header?: { cwd?: unknown }; meta?: { cwd?: unknown } } } | undefined)
+    ?.session;
+  // 真实字段是 session.header.cwd（dsh-session 的 SessionHeader）；session.meta 是历史写法，一并兜住
+  const sessionCwd = session?.header?.cwd ?? session?.meta?.cwd;
   if (typeof sessionCwd === 'string' && sessionCwd.length > 0) return sessionCwd;
   return process.cwd();
 }
@@ -600,7 +605,7 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
 
         const targetDrive = pickMigrationTarget(drives);
         const trashPath =
-          args.trashPath ?? config.trashPath ?? (targetDrive ? `${targetDrive.letter}:\\to_delete` : undefined);
+          args.trashPath ?? config.trashPath ?? (targetDrive ? path.join(driveRoot(targetDrive.letter), 'to_delete') : undefined);
 
         if (mode === 'trash' && !trashPath) {
           return unavailable(
@@ -658,16 +663,19 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
         };
 
         const system = drives.find((d) => d.isSystem);
+        // 空闲空间以执行前后的实测为准；万一 statfs 读不到（返回 0，例如路径拼错），
+        // 退回扫描得到的盘符空闲 —— 绝不把「读不到」显示成「0.00 GB」这种假数字。
+        const freeForOutput = report.freeAfterBytes > 0 ? report.freeAfterBytes : (system?.freeBytes ?? 0);
         return {
           ...baseOutput(action),
           status: dryRun ? 'dry-run' : 'executed',
           planId,
           systemDrive,
           totalBytes: system?.totalBytes ?? 0,
-          usedBytes: Math.max(0, (system?.totalBytes ?? 0) - report.freeAfterBytes),
-          freeBytes: report.freeAfterBytes,
+          usedBytes: Math.max(0, (system?.totalBytes ?? 0) - freeForOutput),
+          freeBytes: freeForOutput,
           drives: drives.map<DriveView>((d) => ({ letter: d.letter, totalBytes: d.totalBytes, freeBytes: d.freeBytes })),
-          migrationTarget: targetDrive ? `${targetDrive.letter}:\\` : '',
+          migrationTarget: targetDrive ? driveRoot(targetDrive.letter) : '',
           durationMs: Date.now() - started,
           partial: report.partial,
           execution,
@@ -900,7 +908,7 @@ async function runMigrationAction(input: {
     };
   }
 
-  const targetRoot = config.migrationRoot ?? `${targetDrive.letter}:\\dsh-cc-migrated`;
+  const targetRoot = config.migrationRoot ?? path.join(driveRoot(targetDrive.letter), 'dsh-cc-migrated');
   const ledgerPath = path.join(targetRoot, MIGRATION_LEDGER_FILE);
   const systemRoot = `${systemDrive}:\\`;
   const freeBefore = await freeSpaceOf(systemRoot);
@@ -1027,7 +1035,7 @@ async function runMigrationAction(input: {
     usedBytes: Math.max(0, (system?.totalBytes ?? 0) - freeAfter),
     freeBytes: freeAfter,
     drives: drives.map<DriveView>((d) => ({ letter: d.letter, totalBytes: d.totalBytes, freeBytes: d.freeBytes })),
-    migrationTarget: `${targetDrive.letter}:\\`,
+    migrationTarget: `${driveRoot(targetDrive.letter)}`,
     migrationAdvice: advice,
     durationMs: Date.now() - started,
     partial: report.partial,

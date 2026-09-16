@@ -10,6 +10,7 @@
 import type { RuleIndex } from '../rules/match.js';
 import { freeSpaceOf } from '../scanner/drives.js';
 import { measurePath } from '../scanner/size.js';
+import { driveRoot } from '../util/drive.js';
 import { deletePath, emptyRecycleBin } from './delete.js';
 import type { ElevatedResult, ElevatedTask } from './elevate.js';
 import { isElevated, runElevated, taskDismComponentCleanup, taskDiskCleanup, taskRemoveDirectory } from './elevate.js';
@@ -92,7 +93,8 @@ function needsElevation(target: string, windir: string, programData: string): bo
 }
 
 function isRecycleBinTarget(target: string, systemDrive: string): boolean {
-  return target.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '') === `${systemDrive.toLowerCase()}\\$recycle.bin`;
+  const normalized = target.replace(/\//g, '\\').toLowerCase().replace(/\\+$/, '');
+  return normalized === `${driveRoot(systemDrive).toLowerCase()}$recycle.bin`;
 }
 
 export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteReport> {
@@ -101,7 +103,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
   const items: ExecutedItem[] = [];
   const elevationTasks: ElevatedTask[] = [];
   const log = request.onProgress ?? (() => {});
-  const root = `${request.systemDrive}\\`;
+  const root = driveRoot(request.systemDrive);
   const windir = process.env.WINDIR ?? '';
   const programData = process.env.ProgramData ?? '';
 
