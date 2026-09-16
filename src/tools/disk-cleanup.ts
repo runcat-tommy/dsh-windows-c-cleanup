@@ -21,15 +21,26 @@ import type { ToolRunContext } from '@deepseek-ai/dsh-tools';
 import { classify } from '../classifier/index.js';
 import type { Config } from '../config.js';
 import { executeCleanup } from '../executor/index.js';
+import type { ExecutedItem, ExecuteReport } from '../executor/index.js';
+import { guardTargets } from '../executor/safety.js';
+import {
+  MIGRATION_LEDGER_FILE,
+  activeMigrations,
+  appendLedger,
+  migrateByJunction,
+  readLedger,
+  rollbackMigration,
+  toLedgerEntry,
+} from '../migrator/index.js';
+import type { MigrateOutcome } from '../migrator/index.js';
 import { buildPlan } from '../planner/index.js';
 import { renderExecutionReport } from '../report/execution.js';
 import { renderReport } from '../report/markdown.js';
 import { loadRules } from '../rules/load.js';
-import { buildRuleIndex } from '../rules/match.js';
-import type { RuleSet } from '../rules/schema.js';
-import { listDrives, pickMigrationTarget } from '../scanner/drives.js';
+import { buildRuleIndex, pickWinner } from '../rules/match.js';
+import type { DriveInfo, RuleSet } from '../rules/schema.js';
+import { freeSpaceOf, listDrives, pickMigrationTarget } from '../scanner/drives.js';
 import { scanSystem } from '../scanner/index.js';
-import type { DriveInfo } from '../rules/schema.js';
 import { formatBytes, formatGB, nowStamp, shortPath } from '../util/format.js';
 
 const ACTIONS = ['scan', 'plan', 'apply', 'migrate', 'rollback', 'trash'] as const;
@@ -73,6 +84,8 @@ interface ExecutionView {
   partialCount: number;
   elevationCount: number;
   elevationCanceled: boolean;
+  migratedCount: number;
+  rolledBackCount: number;
   items: ExecItemView[];
 }
 
@@ -100,6 +113,8 @@ interface DiskCleanupOutput {
   drives: DriveView[];
   /** 迁移目标盘，如 "D:\\"；无其他盘时为空串 */
   migrationTarget: string;
+  /** app-config 类迁移规则给出的建议命令（只提示，不自动改配置） */
+  migrationAdvice?: string[];
   execution?: ExecutionView;
   message?: string;
 }
@@ -153,7 +168,7 @@ function describeOutput(value: DiskCleanupOutput): string {
       e.dryRun
         ? `计划处理：${formatBytes(e.plannedBytes)}（${e.items.length} 项）`
         : `逐项测量合计释放：${formatBytes(e.measuredFreedBytes)}（盘符空闲净增 ${formatBytes(e.freedBytes)}）`,
-      `结果：已删除 ${e.deletedCount} ｜ 入暂存区 ${e.trashedCount} ｜ 部分删除 ${e.partialCount} ｜ 已拒绝 ${e.refusedCount}${
+      `结果：已删除 ${e.deletedCount} ｜ 入暂存区 ${e.trashedCount} ｜ 已迁移 ${e.migratedCount} ｜ 已回滚 ${e.rolledBackCount} ｜ 部分完成 ${e.partialCount} ｜ 已拒绝 ${e.refusedCount}${
         e.elevationCount > 0 ? ` ｜ 管理员级任务 ${e.elevationCount}` : ''
       }`,
     ];
@@ -166,6 +181,10 @@ function describeOutput(value: DiskCleanupOutput): string {
       if (e.items.length > 20) lines.push(`  …另有 ${e.items.length - 20} 项，详见报告`);
     }
     lines.push('', `执行报告：${e.reportPath}`);
+    if (value.migrationAdvice && value.migrationAdvice.length > 0) {
+      lines.push('', '建议同时把应用配置指向新路径（插件不自动改配置，请用户确认后执行）：');
+      for (const tip of value.migrationAdvice) lines.push(`  ${tip}`);
+    }
     if (e.dryRun) lines.push('', '如需真正执行：请在用户确认后以 dryRun: false 重新调用。');
     return lines.join('\n');
   }
@@ -199,7 +218,7 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
         'apply/trash 默认 dryRun=true，只列动作不删文件；正确用法是先 scan、把报告交给用户、拿到用户对具体条目的确认，再用 dryRun:false 执行；谨慎层（caution）必须把用户逐项确认的路径放进 items，不允许按级别批量。' +
         '保护名单是硬约束：用户文档、凭据、虚拟磁盘、聊天数据、IDE 配置、未收录规则库的路径一律拒绝执行，即使用户点名也不删。' +
         '需要管理员权限的项（Windows\\Temp、SoftwareDistribution、WinSxS 的 DISM 清理、cleanmgr）会走 UAC 提权，用户拒绝授权时如实回报而非谎报成功。' +
-        '用户有多个盘时优先建议迁移而不是删除（migrate/rollback 在 M3 提供）。',
+        '用户有多个盘时优先建议迁移而不是删除：action=migrate 把目录搬到其他盘并在原位置留下目录联接（应用无感），台账可查、action=rollback 可搬回；迁移同样默认 dryRun，且是「先复制、校验、再删源、最后建联接」，中途失败会回滚副本、不留半迁移状态。',
       parameters: {
         action: {
           type: 'string',
@@ -304,6 +323,11 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
               },
             },
             migrationTarget: { type: 'string' },
+            migrationAdvice: {
+              type: 'array',
+              description: '迁移时给出的建议命令（例如把应用缓存配置指向新路径），仅提示、不自动改配置',
+              items: { type: 'string' },
+            },
             execution: {
               type: 'object',
               additionalProperties: false,
@@ -326,6 +350,8 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
                 partialCount: { type: 'number', required: true },
                 elevationCount: { type: 'number', required: true },
                 elevationCanceled: { type: 'boolean', required: true },
+                migratedCount: { type: 'number', required: true },
+                rolledBackCount: { type: 'number', required: true },
                 items: {
                   type: 'array',
                   required: true,
@@ -361,13 +387,6 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
         const started = Date.now();
         const scope = (args.scope as 'hotspots' | 'full' | undefined) ?? config.defaultScope;
 
-        if (action === 'migrate' || action === 'rollback') {
-          return unavailable(
-            action,
-            `action=${action} 属于 M3 迁移层，尚未实现。当前可用：scan / plan（只读扫描）与 apply / trash（清理执行，默认 dryRun）。`,
-          );
-        }
-
         const { ruleSet, warnings } = await loadRules({
           extraRulesFile: args.extraRulesFile ?? config.extraRulesFile,
           allowProtectedOverride: config.allowProtectedOverride,
@@ -376,6 +395,11 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
         const index = buildRuleIndex(ruleSet.rules);
         const drives = await listDrives();
         const systemDrive = drives.find((d) => d.isSystem)?.letter ?? 'C';
+
+        // 迁移层（M3）：migrate / rollback —— 在做任何扫描之前分流
+        if (action === 'migrate' || action === 'rollback') {
+          return runMigrationAction({ action, args, config, ruleSet, index, drives, systemDrive, exec, started });
+        }
 
         if (READ_ONLY.includes(action)) {
           return runScan({ action, scope, args, config, ruleSet, index, drives, exec, started });
@@ -386,7 +410,10 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
 
         const requestedGrade = args.grade as 'safe' | 'caution' | 'migrate' | undefined;
         if (requestedGrade === 'migrate') {
-          return unavailable(action, '迁移层属于 M3，尚未实现。当前可清理安全层与谨慎层。');
+          return unavailable(
+            action,
+            '迁移层请用 action=migrate（把目录搬到其他盘并在原位置保留目录联接），不要用 apply 删除它。',
+          );
         }
 
         const targets: string[] = Array.isArray(args.items) ? [...args.items] : [];
@@ -503,6 +530,8 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
           partialCount: countOf('partial') + countOf('failed'),
           elevationCount: report.elevationTasks.length,
           elevationCanceled: report.elevation?.canceled === true,
+          migratedCount: 0,
+          rolledBackCount: 0,
           items: report.items.map<ExecItemView>((item) => ({
             path: item.path,
             action: item.action,
@@ -611,5 +640,237 @@ async function runScan(input: {
     bigItems,
     drives: plan.drives.map<DriveView>((d) => ({ letter: d.letter, totalBytes: d.totalBytes, freeBytes: d.freeBytes })),
     migrationTarget: plan.migrationTarget ? `${plan.migrationTarget.letter}:\\` : '',
+  };
+}
+
+/** 迁移结果 → 执行报告中的一行 */
+function migrationRow(outcome: MigrateOutcome, ruleId: string, source: string, destination: string): ExecutedItem {
+  const action: ExecutedItem['action'] =
+    outcome.status === 'migrated'
+      ? 'migrated'
+      : outcome.status === 'rolled-back'
+        ? 'rolled-back'
+        : outcome.status === 'planned'
+          ? 'planned'
+          : outcome.status === 'source-busy'
+            ? 'partial'
+            : 'failed';
+
+  const statusText: Record<string, string> = {
+    migrated: '已迁移并在原位置建立目录联接',
+    'rolled-back': '已搬回原位置并删除联接',
+    planned: '计划执行（dryRun，未改动数据）',
+    'destination-exists': '目标已存在，未执行（不做合并）',
+    'insufficient-space': '目标盘空间不足，未执行',
+    'source-busy': '源目录被占用，未迁移；已回滚副本，原状态不变',
+    'verify-failed': '校验失败，已回滚',
+    failed: '执行失败',
+  };
+
+  const detail = [...outcome.journal.slice(-2), ...outcome.errors].join('；').replace(/\|/g, '/');
+  return {
+    path: source,
+    ruleId,
+    action,
+    sizeBefore: outcome.sizeBytes,
+    freedBytes: outcome.freedBytes,
+    remainingBytes: 0,
+    reason: `${statusText[outcome.status] ?? outcome.status}${detail ? `｜${detail}` : ''}`,
+    movedTo: destination,
+  };
+}
+
+/** 迁移 / 回滚分支（M3） */
+async function runMigrationAction(input: {
+  action: Action;
+  args: Record<string, unknown>;
+  config: Config;
+  ruleSet: RuleSet;
+  index: ReturnType<typeof buildRuleIndex>;
+  drives: DriveInfo[];
+  systemDrive: string;
+  exec: ToolRunContext;
+  started: number;
+}): Promise<DiskCleanupOutput> {
+  const { action, args, config, ruleSet, index, drives, systemDrive, exec, started } = input;
+  const dryRun = args.dryRun !== false; // 迁移同样默认预演
+  const requested = args.targetDrive as string | undefined;
+  const targetDrive = requested
+    ? drives.find((d) => d.letter === requested.replace(/[^a-zA-Z]/g, '').slice(0, 1).toUpperCase())
+    : pickMigrationTarget(drives);
+
+  if (!targetDrive) {
+    return {
+      ...baseOutput(action),
+      status: 'not-implemented',
+      systemDrive,
+      drives: drives.map<DriveView>((d) => ({ letter: d.letter, totalBytes: d.totalBytes, freeBytes: d.freeBytes })),
+      message: `迁移需要另一个盘${requested ? `（指定的 ${requested} 不存在或不可用）` : ''}：未检测到非系统盘。`,
+    };
+  }
+  if (targetDrive.letter.toUpperCase() === systemDrive.toUpperCase()) {
+    return {
+      ...baseOutput(action),
+      status: 'not-implemented',
+      systemDrive,
+      message: '迁移目标不能是系统盘本身：同盘迁移不会释放空间。',
+    };
+  }
+
+  const targetRoot = config.migrationRoot ?? `${targetDrive.letter}:\\dsh-cc-migrated`;
+  const ledgerPath = path.join(targetRoot, MIGRATION_LEDGER_FILE);
+  const systemRoot = `${systemDrive}:\\`;
+  const freeBefore = await freeSpaceOf(systemRoot);
+  const startedAt = new Date().toISOString();
+  const items: ExecutedItem[] = [];
+  const errors: string[] = [];
+  const advice: string[] = [];
+
+  if (action === 'rollback') {
+    const entries = await readLedger(ledgerPath);
+    const wanted =
+      Array.isArray(args.items) && args.items.length > 0
+        ? new Set(args.items.map((item) => String(item).toLowerCase()))
+        : undefined;
+    const active = activeMigrations(entries).filter((entry) => !wanted || wanted.has(entry.source.toLowerCase()));
+    if (active.length === 0) {
+      return {
+        ...baseOutput(action),
+        status: 'not-implemented',
+        systemDrive,
+        message: `没有可回滚的迁移记录（台账：${ledgerPath}）。`,
+      };
+    }
+    for (const entry of active) {
+      const outcome = await rollbackMigration(entry, { dryRun, signal: exec.signal });
+      if (outcome.status === 'rolled-back') await appendLedger(ledgerPath, toLedgerEntry(outcome, entry.ruleId));
+      items.push(migrationRow(outcome, entry.ruleId ?? 'migrated', entry.source, entry.destination));
+      errors.push(...outcome.errors);
+    }
+  } else {
+    const sources: string[] = Array.isArray(args.items) ? [...args.items] : [];
+    if (args.grade === 'migrate') {
+      const scan = await scanSystem(
+        ruleSet,
+        {
+          hotspotTimeBudgetMs: config.hotspotTimeBudgetMs,
+          topTree: {
+            enabled: (args.scope as string | undefined ?? config.defaultScope) === 'full',
+            maxDepth: config.topTreeMaxDepth,
+            timeBudgetMs: config.topTreeTimeBudgetMs,
+          },
+          signal: exec.signal,
+        },
+        index,
+      );
+      const classified = classify(scan.items, ruleSet.rules, index, {
+        allowProtectedOverride: config.allowProtectedOverride,
+      });
+      for (const item of classified) if (item.grade === 'migrate') sources.push(item.path);
+    }
+    if (sources.length === 0) {
+      return {
+        ...baseOutput(action),
+        status: 'not-implemented',
+        systemDrive,
+        message:
+          '没有迁移目标：请提供 items（用户确认过的目录）或 grade=migrate（自动挑选规则库里的迁移层）。建议先 scan 并把报告的 🟠 迁移清单交给用户确认。',
+      };
+    }
+
+    const guards = await guardTargets(sources, {
+      index,
+      systemDrive,
+      allowExplicitUnmatched: config.allowExplicitUnmatched,
+      allowProtectedOverride: config.allowProtectedOverride,
+    });
+    for (const refused of guards.refused) {
+      items.push({
+        path: refused.path,
+        ruleId: refused.ruleId,
+        action: 'refused',
+        sizeBefore: 0,
+        freedBytes: 0,
+        remainingBytes: 0,
+        reason: refused.reason,
+      });
+    }
+    for (const allowed of guards.allowed) {
+      const rule = pickWinner(allowed.path, index)?.rule;
+      const outcome = await migrateByJunction(allowed.path, {
+        targetRoot,
+        dryRun,
+        ruleId: rule?.id,
+        method: rule?.migrate?.method ?? 'junction',
+        advice: rule?.migrate?.configHint ? [rule.migrate.configHint] : [],
+        signal: exec.signal,
+      });
+      if (outcome.status === 'migrated') await appendLedger(ledgerPath, toLedgerEntry(outcome, rule?.id));
+      items.push(migrationRow(outcome, allowed.ruleId, allowed.path, outcome.destination));
+      errors.push(...outcome.errors);
+      advice.push(...outcome.advice);
+    }
+  }
+
+  const freeAfter = await freeSpaceOf(systemRoot);
+  const report: ExecuteReport = {
+    mode: action === 'rollback' ? 'rollback' : 'migrate',
+    dryRun,
+    startedAt,
+    finishedAt: new Date().toISOString(),
+    systemDrive,
+    freeBeforeBytes: freeBefore,
+    freeAfterBytes: freeAfter,
+    freedBytes: dryRun ? 0 : Math.max(0, freeAfter - freeBefore),
+    measuredFreedBytes: items.reduce((sum, item) => sum + item.freedBytes, 0),
+    plannedBytes: items.reduce((sum, item) => sum + item.sizeBefore, 0),
+    items,
+    elevationTasks: [],
+    errors,
+    partial: items.some((item) => item.action === 'failed' || item.action === 'partial'),
+  };
+
+  const reportPath = path.join(outputDir(config), `C盘迁移报告-${nowStamp()}.md`);
+  await fs.mkdir(path.dirname(reportPath), { recursive: true });
+  await fs.writeFile(reportPath, renderExecutionReport(report), 'utf8');
+
+  const countOf = (name: string): number => items.filter((item) => item.action === name).length;
+  const system = drives.find((d) => d.isSystem);
+  return {
+    ...baseOutput(action),
+    status: dryRun ? 'dry-run' : 'executed',
+    systemDrive,
+    totalBytes: system?.totalBytes ?? 0,
+    usedBytes: Math.max(0, (system?.totalBytes ?? 0) - freeAfter),
+    freeBytes: freeAfter,
+    drives: drives.map<DriveView>((d) => ({ letter: d.letter, totalBytes: d.totalBytes, freeBytes: d.freeBytes })),
+    migrationTarget: `${targetDrive.letter}:\\`,
+    migrationAdvice: advice,
+    durationMs: Date.now() - started,
+    partial: report.partial,
+    execution: {
+      mode: report.mode,
+      dryRun,
+      freedBytes: report.freedBytes,
+      measuredFreedBytes: report.measuredFreedBytes,
+      plannedBytes: report.plannedBytes,
+      reportPath,
+      deletedCount: countOf('deleted'),
+      trashedCount: countOf('trashed'),
+      plannedCount: countOf('planned'),
+      refusedCount: countOf('refused'),
+      partialCount: countOf('partial') + countOf('failed'),
+      elevationCount: 0,
+      elevationCanceled: false,
+      migratedCount: countOf('migrated'),
+      rolledBackCount: countOf('rolled-back'),
+      items: items.map<ExecItemView>((item) => ({
+        path: item.path,
+        action: item.action,
+        sizeBefore: item.sizeBefore,
+        freedBytes: item.freedBytes,
+        reason: item.reason,
+      })),
+    },
   };
 }

@@ -54,13 +54,14 @@ The plugin registers one tool, `disk_cleanup`:
 
 | Parameter | Value | Description |
 | --- | --- | --- |
-| `action` | `scan` \| `plan` \| `apply` \| `migrate` \| `rollback` \| `trash` | Required. `scan`/`plan` are read-only; `apply`/`trash` execute cleanup (M2); `migrate`/`rollback` are M3 |
+| `action` | `scan` \| `plan` \| `apply` \| `migrate` \| `rollback` \| `trash` | Required. `scan`/`plan` are read-only; `apply`/`trash` execute cleanup (M2); `migrate`/`rollback` move and restore data (M3) |
 | `scope` | `hotspots` \| `full` | `hotspots` measures rule-library hotspots only (fast); `full` adds a whole-drive Top-N pass (default) |
 | `reportPath` | path | Where the report is written; defaults to `<cwd>/C盘清理报告-<timestamp>.md` |
 | `items` | paths | Concrete paths to clean (required for the caution tier: only per-item user-confirmed paths) |
-| `grade` | `safe` \| `caution` \| `migrate` | Select by tier: `safe` may be batched, `caution` must also pass `items`, `migrate` is M3 |
+| `grade` | `safe` \| `caution` \| `migrate` | Select by tier: `safe` may be batched, `caution` must also pass `items`, `migrate` drives `action=migrate` |
 | `mode` | `permanent` \| `trash` | `trash` moves items to the staging area for recovery (**default**); `permanent` deletes outright |
 | `trashPath` | path | Staging root, **must be on another drive** (same-volume staging frees nothing); defaults to `<largest non-system drive>:\to_delete` |
+| `migrationRoot` | path | Migration root; the `ledger.jsonl` ledger lives alongside it. Defaults to `<largest non-system drive>:\dsh-cc-migrated` |
 | `dryRun` | boolean | **Defaults to `true`**: lists the actions without deleting anything; pass `false` only after the user confirms |
 | `elevation` | `none` \| `dism` \| `cleanmgr` \| `dism+cleanmgr` | Whether to also run admin-level system cleanup (triggers UAC) |
 | `targetDrive` | e.g. `D:` | Migration target; defaults to the non-system drive with the most free space |
@@ -139,7 +140,7 @@ Attempts to override a `overridable: false` protected entry are rejected with a 
 - **No link following**: junctions and symlinks are never followed, avoiding double counting and recursion traps.
 - **Reversible migration**: migrations use junctions or app config and are recorded in a ledger (`rollback` from M3).
 
-## Status (M1 + M2)
+## Status (M1 + M2 + M3)
 
 - [x] Rule library (100+ rules, placeholder-based) + long-term prevention list
 - [x] Scanning: drive info, hotspot list, whole-drive Top-N, junction-safe measurement, time budgets
@@ -147,12 +148,12 @@ Attempts to override a `overridable: false` protected entry are rejected with a 
 - [x] Visual Markdown report
 - [x] DSH tool registration (`disk_cleanup`, parameter/output schemas validated)
 - [x] M2 Execution: deletion (batch for the safe tier, per-item for caution), staging area with ledger, UAC elevation (Windows\Temp / WinSxS / DISM / cleanmgr), execution report, dry run by default
-- [ ] M3 Migration: junction moves, app-config redirects, ledger and `rollback`
+- [x] M3 Migration: junction moves (transparent to applications), JSONL ledger and `rollback`, refusal and rollback on same-volume / existing-destination / insufficient-space / busy-source, app-config suggestions
 - [ ] M4 Web GUI: five-tier cards, selection, progress, before/after space comparison
 - [ ] M5 Scheduled scans and alerts
 - [ ] M6 Release (npm + community marketplace)
 
-## Known limitations (M1 + M2)
+## Known limitations (M1 + M2 + M3)
 
 - **Execution requires explicit authorization**: `apply` / `trash` dry-run by default; a real run should follow a scan the user has reviewed. `migrate` / `rollback` still return `not-implemented` (M3).
 - **Admin-level cleanup depends on the UAC prompt**: DSH's permission stack has no UAC primitive, so the plugin spawns the system prompt via `Start-Process -Verb RunAs` (the script lands in `%TEMP%\dsh-cc-elevated-*.ps1`). If the user declines, `Windows\Temp`, `SoftwareDistribution`, and WinSxS cannot be cleaned and the result is explicitly marked as cancelled.
@@ -169,6 +170,7 @@ npm install --legacy-peer-deps   # DSH type packages have peer conflicts; local 
 npm run typecheck                 # type check
 npm run smoke                     # fast self-check: rule matching / drive info / budgeted measurement
 npm run m2                        # isolated M2 execution tests (sandboxed under %TEMP%)
+npm run m3                        # isolated M3 migration tests (sandbox + D:\dsh-cc-m3-test)
 npx tsx tests/tool-run.ts full     # headless full scan producing a real report
 npm run build                      # compile to lib/ (publishable artifact)
 ```

@@ -9,12 +9,21 @@ import { formatBytes, formatGB, shortPath } from '../util/format.js';
 const ACTION_LABEL: Record<string, string> = {
   deleted: '✅ 已删除',
   trashed: '📦 已移入暂存区',
-  partial: '⚠️ 部分删除（有文件被占用）',
-  failed: '❌ 删除失败',
+  partial: '⚠️ 部分完成（有文件被占用）',
+  failed: '❌ 执行失败',
   refused: '🛡️ 已拒绝',
   planned: '📝 计划执行（dryRun）',
   'needs-elevation': '🔑 需要管理员权限',
   'elevation-canceled': '🚫 用户取消 UAC',
+  migrated: '➡️ 已迁移到其他盘',
+  'rolled-back': '↩️ 已回滚迁移',
+};
+
+const MODE_LABEL: Record<string, string> = {
+  permanent: '永久删除',
+  trash: '暂存区（可恢复）',
+  migrate: '迁移到其他盘（原位置保留目录联接）',
+  rollback: '回滚迁移（把数据搬回 C 盘）',
 };
 
 function tableRow(cells: string[]): string {
@@ -27,7 +36,9 @@ export function renderExecutionReport(report: ExecuteReport): string {
   lines.push('');
   lines.push('## 概况');
   lines.push('');
-  lines.push(`- 模式：**${report.mode === 'trash' ? '暂存区（可恢复）' : '永久删除'}** ｜ dryRun：**${report.dryRun ? '是（未删除任何文件）' : '否'}**`);
+  lines.push(
+    `- 模式：**${MODE_LABEL[report.mode] ?? report.mode}** ｜ dryRun：**${report.dryRun ? '是（未改动任何数据）' : '否'}**`,
+  );
   if (report.trashPath) lines.push(`- 暂存区：\`${report.trashPath}\``);
   lines.push(
     `- 系统盘 ${report.systemDrive} 空闲：${formatGB(report.freeBeforeBytes)} → ${formatGB(report.freeAfterBytes)}` +

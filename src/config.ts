@@ -24,6 +24,8 @@ export interface Config {
   defaultDeleteMode: 'permanent' | 'trash';
   /** 暂存区路径；缺省为 <空闲最大的非系统盘>:\to_delete */
   trashPath?: string;
+  /** 迁移根目录；缺省为 <空闲最大的非系统盘>:\dsh-cc-migrated（台账 ledger.jsonl 就放在这里） */
+  migrationRoot?: string;
   /** 用户附加规则文件（JSON，结构同内置规则库） */
   extraRulesFile?: string;
 }
@@ -53,5 +55,8 @@ export const Config: Schema<Config> = Schema.object({
     .default('trash')
     .description('默认删除模式：trash=移到其他盘暂存区（可恢复）；permanent=直接删除'),
   trashPath: Schema.string().description('暂存区路径，缺省为 <空闲最大的非系统盘>:\\to_delete'),
+  migrationRoot: Schema.string().description(
+    '迁移根目录，缺省为 <空闲最大的非系统盘>:\\dsh-cc-migrated；迁移台账 ledger.jsonl 存放于此',
+  ),
   extraRulesFile: Schema.string().description('用户附加规则文件路径'),
 });

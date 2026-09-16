@@ -56,11 +56,11 @@ dsh web --patch .\dev.cordis.yml
 
 | 参数 | 取值 | 说明 |
 | --- | --- | --- |
-| `action` | `scan` \| `plan` \| `apply` \| `migrate` \| `rollback` \| `trash` | 必填。`scan`/`plan` 只读；`apply`/`trash` 执行清理（M2）；`migrate`/`rollback` 属 M3 |
+| `action` | `scan` \| `plan` \| `apply` \| `migrate` \| `rollback` \| `trash` | 必填。`scan`/`plan` 只读；`apply`/`trash` 执行清理（M2）；`migrate`/`rollback` 迁移与回滚（M3） |
 | `scope` | `hotspots` \| `full` | `hotspots` 只按规则库测热点（快）；`full` 追加全盘 Top-N 大目录（默认） |
 | `reportPath` | 路径 | 报告落盘位置，缺省 `工作目录/C盘清理报告-<时间戳>.md` |
 | `items` | 路径数组 | 要清理的具体路径（**谨慎层必填**：只接受用户逐项确认过的路径） |
-| `grade` | `safe` \| `caution` \| `migrate` | 按层级选范围：`safe` 可批量；`caution` 必须同时给出 `items`；`migrate` 属 M3 |
+| `grade` | `safe` \| `caution` \| `migrate` | 按层级选范围：`safe` 可批量；`caution` 必须同时给出 `items`；`migrate` 配合 `action=migrate` 自动挑选迁移层 |
 | `mode` | `permanent` \| `trash` | 删除模式：`trash` 移到其他盘暂存区（可恢复，**默认**）；`permanent` 永久删除 |
 | `trashPath` | 路径 | 暂存区位置，**必须位于其他盘**（同盘移动不释放空间）；缺省 `<空闲最大的非系统盘>:\to_delete` |
 | `dryRun` | 布尔 | **默认 `true`**：只列出将要执行的动作，不删任何文件；用户确认后才传 `false` |
@@ -100,6 +100,38 @@ dsh web --patch .\dev.cordis.yml
 
 执行报告与返回值会给出：逐项结果（已删除 / 已入暂存区 / 部分删除 / 已拒绝 / 需提权）、**逐项测量合计释放量**、盘符空闲净增、被拒绝项的完整理由、提权脚本路径与日志摘要。
 
+### 迁移与回滚（M3）
+
+「删掉」只是治标——企业微信、WPS、浏览器、包管理器的缓存删完会再长回来（实测一轮清理后约 11 GB 被应用自己重建）。迁移是治本：把目录搬到其他盘，**在原位置留一个目录联接（junction）**，应用完全无感。
+
+```jsonc
+// 1) 预演迁移（不动数据）
+{ "action": "migrate", "items": ["C:\\Users\\<你>\\AppData\\Local\\npm-cache"], "targetDrive": "D" }
+
+// 2) 用户确认后执行；原目录变成 junction，数据在 D:\dsh-cc-migrated\npm-cache
+{ "action": "migrate", "items": ["..."], "targetDrive": "D", "dryRun": false }
+
+// 3) 自动挑选规则库里的 🟠 迁移层
+{ "action": "migrate", "grade": "migrate", "dryRun": false }
+
+// 4) 后悔了：依据台账搬回并删除联接
+{ "action": "rollback", "dryRun": false }
+```
+
+不可让步的执行顺序：**复制 → 校验（大小与文件数）→ 删除源 → 建立联接 → 校验联接可读**。任何一步失败都会清理副本并保持原状，绝不留下「半迁移」状态让用户自己收拾。具体保证：
+
+| 情况 | 行为 |
+| --- | --- |
+| 目标与源在同一盘 | 拒绝（移动不释放空间） |
+| 目标同名目录已存在 | 拒绝并提示，**绝不合并** |
+| 目标盘空间不足 | 拒绝，并给出需要的空间 |
+| 源目录被应用占用、删不掉 | 回滚已复制的副本，原状态不变，提示先关闭应用 |
+| 复制成功但建联接失败 | 明确报告数据已在新位置、老路径不可用，绝不谎报成功 |
+| 回滚时源位置不是联接或指向不一致 | **拒绝回滚**，避免覆盖用户后来放回的数据 |
+| 迁移台账 | `<migrationRoot>\ledger.jsonl`，逐条记录源/目标/大小/时间/方法 |
+
+`app-config` 类规则（如 npm 缓存）除搬数据外，还会返回建议命令（例如 `npm config set cache "D:\..."`），但**不自动修改应用配置**。目录联接在 Windows 上不需要管理员权限。
+
 ## 配置
 
 在 profile 的 `cordis.patch.yml` 中覆盖（patch 会**整体替换**该行 config，不做深合并）：
@@ -118,6 +150,7 @@ dsh web --patch .\dev.cordis.yml
     allowExplicitUnmatched: false
     defaultDeleteMode: trash
     trashPath: 'D:\to_delete'
+    migrationRoot: 'D:\dsh-cc-migrated'
     extraRulesFile: 'D:\my-rules.json'
 ```
 
@@ -133,6 +166,7 @@ dsh web --patch .\dev.cordis.yml
 | `allowExplicitUnmatched` | `false` | 是否允许清理未收录规则库的显式路径（默认「不明即不删」） |
 | `defaultDeleteMode` | `trash` | 默认删除模式：`trash` 移到其他盘暂存区，`permanent` 直接删除 |
 | `trashPath` | `<空闲最大的非系统盘>:\to_delete` | 暂存区位置（必须与其他盘同盘不同卷才释放空间） |
+| `migrationRoot` | `<空闲最大的非系统盘>:\dsh-cc-migrated` | 迁移根目录；迁移台账 `ledger.jsonl` 与之同目录 |
 | `extraRulesFile` | 无 | 用户附加规则文件 |
 
 ## 规则库
@@ -180,7 +214,7 @@ dsh web --patch .\dev.cordis.yml
 - **不跟随链接**：junction / 符号链接一律不跟随，避免重复计数与递归踩坑。
 - **迁移可回滚**：迁移用 `junction` 或应用配置改路径，并记录台账（M3 起提供 `rollback`）。
 
-## 当前状态（M1 + M2）
+## 当前状态（M1 + M2 + M3）
 
 - [x] 规则库（100+ 条，占位符化）+ 长期防护清单
 - [x] 扫描：盘符信息、热点清单、全盘 Top-N、junction 安全测量、时间预算
@@ -188,12 +222,12 @@ dsh web --patch .\dev.cordis.yml
 - [x] 可视化 Markdown 报告
 - [x] DSH 工具注册（`disk_cleanup`，参数/输出 schema 校验通过）
 - [x] M2 执行层：删除（安全层批量 / 谨慎层逐项）、暂存区与台账、UAC 提权（Windows\Temp / WinSxS / DISM / cleanmgr）、执行报告与 dryRun 默认
-- [ ] M3 迁移层：junction 迁移、应用配置改路径、台账与 `rollback`
+- [x] M3 迁移层：目录联接迁移（应用无感）、迁移台账与 `rollback`、对同盘/同名冲突/空间不足/源被占用的拒绝与回滚、app-config 建议命令
 - [ ] M4 Web GUI：五级分区卡片、勾选、进度、空间变化对比
 - [ ] M5 定时扫描与告警
 - [ ] M6 发布（npm + 社区插件市场）
 
-## 已知限制（M1 + M2）
+## 已知限制（M1 + M2 + M3）
 
 - **执行需要明确授权**：`apply` / `trash` 默认预演；真正的执行路径必须先跑扫描并把报告交给用户确认。`migrate` / `rollback` 仍是 `not-implemented`（M3）。
 - **管理员级清理依赖 UAC 弹窗**：DSH 的权限栈没有 UAC 原语，插件通过 `Start-Process -Verb RunAs` 触发系统弹窗（脚本落在 `%TEMP%\dsh-cc-elevated-*.ps1`）；用户不点「是」就无法清理 `Windows\Temp`、`SoftwareDistribution`、WinSxS 等，此时结果里会明确标记为「用户取消」。
@@ -201,6 +235,8 @@ dsh web --patch .\dev.cordis.yml
 - **全盘 Top-N 覆盖度受 I/O 上限约束**：Node 的文件操作走 libuv 线程池（默认 4 线程），目录测量成本基本由**文件数**决定，加并发也提不上去。因此在 70 秒预算内，153 GB 已用盘的热点规则可 100% 覆盖，但全盘 Top-N 只能遍历部分目录（实测约 160 个顶层/浅层目录后截断）。
   截断时报告与工具返回值都会标记 `partial` 并说明原因，不会伪装成完整结论；需要更高覆盖率可调大 `topTreeTimeBudgetMs`（代价是等待更久）。**可执行结论来自热点规则，Top-N 只作兜底**，因此截断不影响五级清单的可用性。
 - **释放量核算的两种口径**：小体量清理（数十 MB 级）时「盘符空闲净增」可能为 0（被其他进程同时写入掩盖），此时以「逐项测量合计」为准，报告里会同时给出并注明。
+- **迁移耗时与被迁移体积成正比**：迁移是「复制 → 校验 → 删源 → 建联接」，数十 GB 的目录会很慢（工具超时上限 15 分钟）；被应用占用的目录会在删源阶段中止并回滚副本。
+- **`app-config` 类迁移不自动改配置**：插件只搬数据（并建立目录联接保证应用仍可用）并给出建议命令；是否让应用改用新路径由用户确认后自己执行，避免静默改坏环境。
 - 尚未提供交互式确认界面：目前由模型把报告交给用户，用户选定范围后再进入执行链路（M4 提供 GUI 卡片）。
 
 ## 开发
@@ -210,6 +246,7 @@ npm install --legacy-peer-deps   # DSH 类型包 peer 冲突，本地用 legacy 
 npm run typecheck                # 类型检查
 npm run smoke                    # 快速自检：规则匹配 / 盘信息 / 限时测量
 npm run m2                       # M2 执行层隔离用例（真实删除只发生在 %TEMP% 沙箱）
+npm run m3                       # M3 迁移层隔离用例（真实迁移只发生在 %TEMP% 沙箱 + D:\dsh-cc-m3-test）
 npx tsx tests/tool-run.ts full    # 无头跑完整扫描，产出真实报告
 npm run build                     # 编译到 lib/（发布物）
 ```

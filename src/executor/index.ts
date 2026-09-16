@@ -43,7 +43,9 @@ export type ExecutedAction =
   | 'refused'
   | 'planned'
   | 'needs-elevation'
-  | 'elevation-canceled';
+  | 'elevation-canceled'
+  | 'migrated'
+  | 'rolled-back';
 
 export interface ExecutedItem {
   path: string;
@@ -56,8 +58,11 @@ export interface ExecutedItem {
   movedTo?: string;
 }
 
+/** 执行模式；migrate / rollback 由 M3 迁移层复用同一份执行报告结构 */
+export type ExecutionMode = 'permanent' | 'trash' | 'migrate' | 'rollback';
+
 export interface ExecuteReport {
-  mode: 'permanent' | 'trash';
+  mode: ExecutionMode;
   dryRun: boolean;
   startedAt: string;
   finishedAt: string;

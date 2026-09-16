@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.3.0] — M3: migration layer (junctions / ledger / rollback)
+
+### Added
+
+- **Migration engine** `src/migrator/index.ts`: `migrateByJunction` (copy → verify → delete source → create junction), `rollbackMigration` (unlink → move back → verify → drop the copy), a JSONL ledger, and `activeMigrations`.
+- **Tool actions**: `migrate` and `rollback` are implemented; `grade: 'migrate'` picks the migration tier straight from the rule library.
+- **Migration invariant**: ① copy, ② verify size and file count, ③ delete the source, ④ create the junction, ⑤ verify the junction is readable. Any failure **cleans up the copy and leaves the original untouched** — no half-migrated state.
+- **Junctions**: creating a junction on Windows needs **no administrator rights**, so applications keep reading and writing the old path transparently. Same-volume migration is refused outright (it frees nothing).
+- **Rollback safety**: the junction target is compared against the ledger first; if the original path is no longer a junction or points elsewhere, rollback is **refused** rather than overwriting data.
+- **Config**: new `migrationRoot` (defaults to `<largest non-system drive>:\dsh-cc-migrated`, with `ledger.jsonl` alongside).
+- **Tests**: `tests/m3-migrate.ts` (`npm run m3`), 14 isolated cases: protection-list refusal, same-volume refusal, junction-as-source refusal, existing-destination refusal, dry run by default, a real migration with reads through the junction, ledger persistence, rollback, and rollback with no records.
+
+### Fixed
+
+- **Drive-root string bug**: `driveOf()` already returns `d:`, so appending `:\\` produced `D::\`, which made `fs.statfs` fail and every migration report "not enough space on the target drive" (caught by the test on the first run). The space pre-check is now tri-state: an unreadable free-space figure is no longer treated as "not enough" — the copy proceeds and an `ENOSPC` failure rolls the copy back.
+
+### Known limitations
+
+- Rules marked `app-config` currently move the data and print the suggested command; they do **not** rewrite application configuration automatically.
+- Migration is copy-then-delete, so large directories (tens of GB) take time proportional to their size (tool timeout is 15 minutes).
+- A directory in use by a running app cannot be migrated: the copy is rolled back and the user is told to close the app first.
+
 ## [0.2.0] — M2: execution layer (delete / staging / elevation)
 
 ### Added
