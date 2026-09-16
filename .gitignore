@@ -1,0 +1,15 @@
+# 依赖与构建产物（lib/ 由 npm run build 生成，不入库）
+node_modules/
+lib/
+*.tgz
+
+# 插件运行产物：报告与日志不应入库
+C盘清理报告-*.md
+C盘清理执行报告-*.md
+*.log
+
+# 编辑器 / 系统
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

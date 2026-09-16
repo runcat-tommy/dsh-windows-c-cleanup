@@ -1,0 +1,5 @@
+# Bundle layer contributed by dsh-windows-c-cleanup.
+# Inserts the plugin row that loads the package's tool module.
+- insert:
+    - id: windows-c-cleanup
+      name: 'dsh-windows-c-cleanup'

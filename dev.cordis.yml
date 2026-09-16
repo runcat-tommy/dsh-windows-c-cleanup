@@ -1,0 +1,14 @@
+# 开发用 overlay：无需安装即可把本插件挂进 DSH（源码直接加载，改完重启即生效）。
+#
+# 用法（Windows 下必须用 file:// URL，绝对盘符路径会报 ERR_UNSUPPORTED_ESM_URL_SCHEME）：
+#   dsh web --patch .\dev.cordis.yml
+#
+# 换机器后请重新生成 name：
+#   node -e "const{pathToFileURL}=require('node:url');console.log(pathToFileURL(process.argv[1]).href)" "$PWD\src\index.ts"
+- insert:
+    - id: windows-c-cleanup-dev
+      name: 'file:///D:/workspace_deepseek_harness/windows-c-cleanup/src/index.ts'
+      config:
+        defaultScope: full
+        hotspotTimeBudgetMs: 70000
+        topTreeTimeBudgetMs: 70000

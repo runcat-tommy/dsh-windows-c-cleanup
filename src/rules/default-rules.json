@@ -1,0 +1,706 @@
+{
+  "version": "0.1.0",
+  "description": "windows-c-cleanup 内置规则库。路径使用 %ENV% 占位符，不包含用户名硬编码，可跨机器复用。grade: safe=可安全删除, caution=谨慎删除, migrate=建议迁移, protected=保护名单(硬约束), longterm=长期防护",
+  "notes": [
+    "匹配规则：候选路径等于规则路径，或位于规则目录之下，即视为命中；含 * 的规则按「单段通配」处理。",
+    "优先级：命中路径最长（最具体）者胜；同长度时 protected 优先。",
+    "overridable:false 的规则为硬约束，用户自定义规则不得覆盖（除非显式开启 allowProtectedOverride）。",
+    "未命中任何规则的目录一律按 protected 处理（不明即不删）。"
+  ],
+  "rules": [
+    {
+      "id": "temp-user",
+      "path": "%TEMP%",
+      "grade": "safe",
+      "reason": "用户临时文件目录，应用运行时不断生成，删除后自动重建；被占用的文件会被跳过"
+    },
+    {
+      "id": "temp-windows",
+      "path": "%WINDIR%\\Temp",
+      "grade": "safe",
+      "reason": "系统临时目录，多为安装器与系统组件残留；部分文件需管理员权限"
+    },
+    {
+      "id": "win-update-download",
+      "path": "%WINDIR%\\SoftwareDistribution\\Download",
+      "grade": "safe",
+      "reason": "Windows 更新下载缓存，更新完成后可安全删除，需要管理员权限"
+    },
+    {
+      "id": "recycle-bin",
+      "path": "%SYSTEMDRIVE%\\$Recycle.Bin",
+      "grade": "safe",
+      "reason": "回收站；删除即彻底清空，建议确认后执行",
+      "special": "recycle-bin"
+    },
+    {
+      "id": "crash-dumps",
+      "path": "%LOCALAPPDATA%\\CrashDumps",
+      "grade": "safe",
+      "reason": "应用程序崩溃转储文件，仅用于事后排查"
+    },
+    {
+      "id": "thumbcache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\thumbcache_*.db",
+      "kind": "file",
+      "grade": "safe",
+      "reason": "资源管理器缩略图缓存，会自动重建；被占用时需先关闭资源管理器窗口"
+    },
+    {
+      "id": "iconcache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\Explorer\\iconcache_*.db",
+      "kind": "file",
+      "grade": "safe",
+      "reason": "资源管理器图标缓存，会自动重建"
+    },
+    {
+      "id": "d3d-shader-cache",
+      "path": "%LOCALAPPDATA%\\D3DSCache",
+      "grade": "safe",
+      "reason": "DirectX 着色器缓存，游戏/图形应用会自动重建"
+    },
+    {
+      "id": "nvidia-dxcache",
+      "path": "%LOCALAPPDATA%\\NVIDIA\\DXCache",
+      "grade": "safe",
+      "reason": "NVIDIA 着色器缓存，自动重建"
+    },
+    {
+      "id": "nvidia-glcache",
+      "path": "%LOCALAPPDATA%\\NVIDIA\\GLCache",
+      "grade": "safe",
+      "reason": "NVIDIA OpenGL 着色器缓存，自动重建"
+    },
+    {
+      "id": "amd-dxcache",
+      "path": "%LOCALAPPDATA%\\AMD\\DxCache",
+      "grade": "safe",
+      "reason": "AMD 着色器缓存，自动重建"
+    },
+    {
+      "id": "inetcache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\INetCache",
+      "grade": "safe",
+      "reason": "WinINet 网络缓存，浏览器与系统组件自动重建"
+    },
+    {
+      "id": "npm-cache-local",
+      "path": "%LOCALAPPDATA%\\npm-cache",
+      "grade": "migrate",
+      "reason": "npm 包缓存，体积常达数 GB；建议迁移到其他盘并从 C 盘释放",
+      "migrate": {
+        "method": "app-config",
+        "targetHint": "<其他盘>:\\npm-cache",
+        "configHint": "npm config set cache \"<目标路径>\""
+      }
+    },
+    {
+      "id": "npm-cache-roaming",
+      "path": "%APPDATA%\\npm-cache",
+      "grade": "safe",
+      "reason": "npm 包缓存的另一常见位置，可安全删除"
+    },
+    {
+      "id": "pip-cache",
+      "path": "%LOCALAPPDATA%\\pip\\cache",
+      "grade": "migrate",
+      "reason": "pip 下载缓存，可安全删除；更推荐迁移到其他盘长期使用",
+      "migrate": {
+        "method": "app-config",
+        "targetHint": "<其他盘>:\\pip-cache",
+        "configHint": "设置用户环境变量 PIP_CACHE_DIR=<目标路径>"
+      }
+    },
+    {
+      "id": "uv-cache-local",
+      "path": "%LOCALAPPDATA%\\uv",
+      "grade": "migrate",
+      "reason": "uv (Python 包管理器) 缓存；可用 uv cache clean 清理或迁移",
+      "migrate": {
+        "method": "app-config",
+        "targetHint": "<其他盘>:\\uv-cache",
+        "configHint": "设置用户环境变量 UV_CACHE_DIR=<目标路径>"
+      }
+    },
+    {
+      "id": "uv-cache-roaming",
+      "path": "%APPDATA%\\uv",
+      "grade": "safe",
+      "reason": "uv 的另一处缓存目录，可安全删除"
+    },
+    {
+      "id": "go-build-cache",
+      "path": "%LOCALAPPDATA%\\go-build",
+      "grade": "safe",
+      "reason": "Go 构建缓存，可用 go clean -cache 清理，会自动重建"
+    },
+    {
+      "id": "node-gyp-cache",
+      "path": "%LOCALAPPDATA%\\node-gyp",
+      "grade": "safe",
+      "reason": "node-gyp 编译头文件缓存，会自动重新下载"
+    },
+    {
+      "id": "generic-updaters",
+      "path": "%LOCALAPPDATA%\\*-updater",
+      "grade": "safe",
+      "reason": "各类应用更新器（Electron updater 等）下载的安装包缓存，应用会按需重新下载"
+    },
+    {
+      "id": "user-dot-cache",
+      "path": "%USERPROFILE%\\.cache",
+      "grade": "safe",
+      "reason": "通用用户级缓存目录（工具链共用），删除后按需重建"
+    },
+    {
+      "id": "yarn-cache",
+      "path": "%USERPROFILE%\\.yarn\\cache",
+      "grade": "safe",
+      "reason": "Yarn 包缓存，可安全删除"
+    },
+    {
+      "id": "vscode-cached-vsix",
+      "path": "%APPDATA%\\Code\\CachedExtensionVSIXs",
+      "grade": "safe",
+      "reason": "VSCode 插件安装包缓存，插件更新时会重新下载"
+    },
+    {
+      "id": "vscode-cached-data",
+      "path": "%APPDATA%\\Code\\CachedData",
+      "grade": "safe",
+      "reason": "VSCode 编译产物缓存，会自动重建"
+    },
+    {
+      "id": "vscode-crashpad",
+      "path": "%APPDATA%\\Code\\Crashpad",
+      "grade": "safe",
+      "reason": "VSCode 崩溃报告缓存"
+    },
+    {
+      "id": "vscode-cache",
+      "path": "%APPDATA%\\Code\\Cache",
+      "grade": "safe",
+      "reason": "VSCode 缓存目录，会自动重建"
+    },
+    {
+      "id": "vscode-code-cache",
+      "path": "%APPDATA%\\Code\\Code Cache",
+      "grade": "safe",
+      "reason": "VSCode 内核脚本缓存，会自动重建"
+    },
+    {
+      "id": "vscode-logs",
+      "path": "%APPDATA%\\Code\\logs",
+      "grade": "safe",
+      "reason": "VSCode 日志"
+    },
+    {
+      "id": "wps-download",
+      "path": "%APPDATA%\\kingsoft\\wps\\download",
+      "grade": "safe",
+      "reason": "WPS 下载的安装包/升级包，实测常占约 2 GB"
+    },
+    {
+      "id": "wps-klog",
+      "path": "%APPDATA%\\kingsoft\\klog",
+      "grade": "safe",
+      "reason": "WPS 日志目录"
+    },
+    {
+      "id": "wps-addons",
+      "path": "%APPDATA%\\kingsoft\\wps\\addons",
+      "grade": "caution",
+      "reason": "WPS 功能插件组件（约 1.8 GB）；删除会导致部分功能首次使用时重新下载，请确认后再删"
+    },
+    {
+      "id": "wxwork-upgrade",
+      "path": "%APPDATA%\\Tencent\\WXWork\\upgrade",
+      "grade": "safe",
+      "reason": "企业微信升级包缓存，实测常占约 2 GB"
+    },
+    {
+      "id": "wxwork-log",
+      "path": "%APPDATA%\\Tencent\\WXWork\\Log",
+      "grade": "safe",
+      "reason": "企业微信日志"
+    },
+    {
+      "id": "lark-update",
+      "path": "%APPDATA%\\LarkShell\\update",
+      "grade": "safe",
+      "reason": "飞书升级包缓存"
+    },
+    {
+      "id": "lark-codecache",
+      "path": "%APPDATA%\\LarkShell\\CodeCache",
+      "grade": "safe",
+      "reason": "飞书脚本缓存，会自动重建"
+    },
+    {
+      "id": "lark-shadercache",
+      "path": "%APPDATA%\\LarkShell\\GrShaderCache",
+      "grade": "safe",
+      "reason": "飞书 GPU 着色器缓存，会自动重建"
+    },
+    {
+      "id": "lark-browsermetrics",
+      "path": "%APPDATA%\\LarkShell\\BrowserMetrics",
+      "grade": "safe",
+      "reason": "飞书浏览器埋点数据"
+    },
+    {
+      "id": "lark-iron-cache",
+      "path": "%APPDATA%\\LarkShell\\iron\\users\\*\\Cache",
+      "grade": "caution",
+      "reason": "飞书内嵌浏览器缓存；清理可释放空间，但会清掉本地网页缓存（登录态不在此目录）"
+    },
+    {
+      "id": "qoder-cache",
+      "path": "%USERPROFILE%\\.qoder-cn\\shared_client\\cache",
+      "grade": "safe",
+      "reason": "Qoder IDE 缓存目录"
+    },
+    {
+      "id": "qoder-logs",
+      "path": "%USERPROFILE%\\.qoder-cn\\shared_client\\logs",
+      "grade": "safe",
+      "reason": "Qoder IDE 日志"
+    },
+    {
+      "id": "qoder-index",
+      "path": "%USERPROFILE%\\.qoder-cn\\shared_client\\index",
+      "grade": "caution",
+      "reason": "Qoder 代码索引（约 1.6 GB）；删除后在打开项目时重建，期间检索会变慢"
+    },
+    {
+      "id": "chrome-cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Cache",
+      "grade": "safe",
+      "reason": "Chrome 网页缓存，会自动重建；建议先退出 Chrome"
+    },
+    {
+      "id": "chrome-code-cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\Code Cache",
+      "grade": "safe",
+      "reason": "Chrome 脚本编译缓存，会自动重建"
+    },
+    {
+      "id": "chrome-gpu-cache",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\Default\\GPUCache",
+      "grade": "safe",
+      "reason": "Chrome GPU 缓存，会自动重建"
+    },
+    {
+      "id": "chrome-profile-caches",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\*\\Cache",
+      "grade": "safe",
+      "reason": "Chrome 其他配置档的网页缓存"
+    },
+    {
+      "id": "chrome-ondevice-model",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\OptGuideOnDeviceModel",
+      "grade": "caution",
+      "reason": "Chrome 端侧 AI 模型（实测约 4 GB）；删除后 Chrome 可能按需重新下载，可在设置中关闭该功能",
+      "migrate": {
+        "method": "junction",
+        "requiresAppClosed": ["chrome.exe"]
+      }
+    },
+    {
+      "id": "chrome-ondevice-classifier",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data\\OptGuideOnDeviceClassifierModel",
+      "grade": "caution",
+      "reason": "Chrome 端侧 AI 分类模型，可删除但可能重新下载"
+    },
+    {
+      "id": "edge-cache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Edge\\User Data\\Default\\Cache",
+      "grade": "safe",
+      "reason": "Edge 网页缓存，会自动重建"
+    },
+    {
+      "id": "jetbrains-caches-local",
+      "path": "%LOCALAPPDATA%\\JetBrains\\*\\caches",
+      "grade": "caution",
+      "reason": "JetBrains IDE 索引缓存（体积可达数 GB）；删除后首次打开项目会重建索引。若用户要求保留 IDE 缓存请跳过"
+    },
+    {
+      "id": "jetbrains-index-local",
+      "path": "%LOCALAPPDATA%\\JetBrains\\*\\index",
+      "grade": "caution",
+      "reason": "JetBrains 索引数据，删除后会重建"
+    },
+    {
+      "id": "jetbrains-log-local",
+      "path": "%LOCALAPPDATA%\\JetBrains\\*\\log",
+      "grade": "safe",
+      "reason": "JetBrains IDE 日志"
+    },
+    {
+      "id": "jetbrains-tmp-local",
+      "path": "%LOCALAPPDATA%\\JetBrains\\*\\tmp",
+      "grade": "safe",
+      "reason": "JetBrains IDE 临时目录"
+    },
+    {
+      "id": "hermes-cache",
+      "path": "%LOCALAPPDATA%\\hermes",
+      "grade": "caution",
+      "reason": "React Native Hermes 字节码缓存，删除后重新编译；可迁移到其他盘",
+      "migrate": {
+        "method": "junction"
+      }
+    },
+    {
+      "id": "lingma-data",
+      "path": "%USERPROFILE%\\.lingma",
+      "grade": "caution",
+      "reason": "通义灵码 AI 助手本地数据（约 1.9 GB）；含模型与索引，删除后需重新下载"
+    },
+    {
+      "id": "maven-repo",
+      "path": "%USERPROFILE%\\.m2\\repository",
+      "grade": "migrate",
+      "reason": "Maven 本地仓库，体积随项目增长；可迁移到其他盘或删除（重新构建会重新下载）",
+      "migrate": {
+        "method": "junction",
+        "configHint": "或在 settings.xml 中设置 <localRepository>"
+      }
+    },
+    {
+      "id": "gradle-caches",
+      "path": "%USERPROFILE%\\.gradle\\caches",
+      "grade": "migrate",
+      "reason": "Gradle 依赖缓存，可迁移到其他盘",
+      "migrate": {
+        "method": "app-config",
+        "configHint": "设置环境变量 GRADLE_USER_HOME=<目标路径>"
+      }
+    },
+    {
+      "id": "nuget-packages",
+      "path": "%USERPROFILE%\\.nuget\\packages",
+      "grade": "migrate",
+      "reason": "NuGet 包缓存，可迁移到其他盘",
+      "migrate": {
+        "method": "app-config",
+        "configHint": "设置环境变量 NUGET_PACKAGES=<目标路径>"
+      }
+    },
+    {
+      "id": "cargo-registry",
+      "path": "%USERPROFILE%\\.cargo\\registry",
+      "grade": "migrate",
+      "reason": "Rust Cargo 依赖缓存，可迁移",
+      "migrate": {
+        "method": "app-config",
+        "configHint": "设置环境变量 CARGO_HOME=<目标路径>"
+      }
+    },
+    {
+      "id": "vscode-extensions",
+      "path": "%USERPROFILE%\\.vscode\\extensions",
+      "grade": "migrate",
+      "reason": "VSCode 插件安装目录（实测约 1.9 GB）；可用 junction 迁移到其他盘，插件仍正常工作",
+      "migrate": {
+        "method": "junction",
+        "requiresAppClosed": ["Code.exe"]
+      }
+    },
+    {
+      "id": "nvm-versions",
+      "path": "%LOCALAPPDATA%\\nvm",
+      "grade": "caution",
+      "reason": "nvm-windows 安装的 Node 版本（每个约 100–300 MB）；旧版本可删除，但迁移需同步调整 PATH 与 NVM_HOME"
+    },
+    {
+      "id": "packages-store",
+      "path": "%LOCALAPPDATA%\\Packages",
+      "grade": "caution",
+      "reason": "UWP/Store 应用数据目录；仅其 LocalCache/TempState 子目录可清，整体删除会丢应用数据"
+    },
+    {
+      "id": "connected-devices",
+      "path": "%LOCALAPPDATA%\\ConnectedDevicesPlatform",
+      "grade": "caution",
+      "reason": "跨设备联动数据缓存；删除会临时影响「继续在其他设备上操作」类功能"
+    },
+    {
+      "id": "webcache",
+      "path": "%LOCALAPPDATA%\\Microsoft\\Windows\\WebCache",
+      "grade": "caution",
+      "reason": "系统 Web 缓存（约数百 MB）；占用时无法删除，需先停止相关服务"
+    },
+    {
+      "id": "winsxs",
+      "path": "%WINDIR%\\WinSxS",
+      "grade": "caution",
+      "reason": "组件存储（实测约 11 GB）；只能通过管理员执行 DISM 清理，禁止直接删除",
+      "special": "dism",
+      "migrate": null
+    },
+    {
+      "id": "windows-logs",
+      "path": "%WINDIR%\\Logs",
+      "grade": "safe",
+      "reason": "Windows 日志目录；部分文件被系统占用会被跳过"
+    },
+    {
+      "id": "defender-scan-history",
+      "path": "%PROGRAMDATA%\\Microsoft\\Windows Defender\\Scans",
+      "grade": "caution",
+      "reason": "Windows Defender 扫描历史记录，需要管理员权限"
+    },
+    {
+      "id": "programdata-packages",
+      "path": "%PROGRAMDATA%\\Package Cache",
+      "grade": "caution",
+      "reason": "Visual Studio / 安装器包缓存；删除会导致修复/卸载安装程序时需重新下载"
+    },
+
+    {
+      "id": "user-documents",
+      "path": "%USERPROFILE%\\Documents",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "用户文档，绝不自动删除"
+    },
+    {
+      "id": "user-desktop",
+      "path": "%USERPROFILE%\\Desktop",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "桌面文件，绝不自动删除"
+    },
+    {
+      "id": "user-downloads",
+      "path": "%USERPROFILE%\\Downloads",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "下载目录，绝不自动删除（是否清理由用户自行决定）"
+    },
+    {
+      "id": "user-pictures",
+      "path": "%USERPROFILE%\\Pictures",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "用户图片"
+    },
+    {
+      "id": "user-videos",
+      "path": "%USERPROFILE%\\Videos",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "用户视频"
+    },
+    {
+      "id": "user-secrets",
+      "path": "%USERPROFILE%\\.ssh",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "SSH 密钥与配置，属于凭据"
+    },
+    {
+      "id": "user-cloud-creds",
+      "path": "%USERPROFILE%\\.aws",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "云服务凭据"
+    },
+    {
+      "id": "user-kube",
+      "path": "%USERPROFILE%\\.kube",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "Kubernetes 配置与凭据"
+    },
+    {
+      "id": "dsh-home",
+      "path": "%USERPROFILE%\\.dsh",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "DeepSeek Harness 配置与会话数据，删除会丢失全部会话与凭据"
+    },
+    {
+      "id": "dsh-agents-home",
+      "path": "%USERPROFILE%\\.agents",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "本地 Agent/Skill 配置根目录"
+    },
+    {
+      "id": "npmrc-file",
+      "path": "%USERPROFILE%\\.npmrc",
+      "kind": "file",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "npm 配置文件（含 registry/缓存路径设置）"
+    },
+    {
+      "id": "gitconfig-file",
+      "path": "%USERPROFILE%\\.gitconfig",
+      "kind": "file",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "Git 全局配置"
+    },
+    {
+      "id": "git-credentials-file",
+      "path": "%USERPROFILE%\\.git-credentials",
+      "kind": "file",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "Git 凭据文件"
+    },
+    {
+      "id": "lark-user-data",
+      "path": "%APPDATA%\\LarkShell\\aha",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "飞书账号与本地数据（实测约 4.6 GB），删除会导致重新登录与数据重新同步"
+    },
+    {
+      "id": "lark-sdk-storage",
+      "path": "%APPDATA%\\LarkShell\\sdk_storage",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "飞书 SDK 本地存储，含登录态与业务数据"
+    },
+    {
+      "id": "wxwork-data",
+      "path": "%APPDATA%\\Tencent\\WXWork",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "企业微信聊天记录与文件数据（其 upgrade/Log 子目录另有 safe 规则覆盖）"
+    },
+    {
+      "id": "wemail-data",
+      "path": "%APPDATA%\\Tencent\\WeMail",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "腾讯邮箱客户端数据"
+    },
+    {
+      "id": "wemeet-data",
+      "path": "%APPDATA%\\Tencent\\WeMeet",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "腾讯会议本地数据"
+    },
+    {
+      "id": "qq-data",
+      "path": "%APPDATA%\\Tencent\\QQ",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "QQ 聊天与文件数据"
+    },
+    {
+      "id": "wechat-data",
+      "path": "%USERPROFILE%\\Documents\\WeChat Files",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "微信聊天记录与文件（含图片、视频、文档）"
+    },
+    {
+      "id": "xwechat-data",
+      "path": "%USERPROFILE%\\Documents\\xwechat_files",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "新版微信聊天文件目录"
+    },
+    {
+      "id": "wps-user-data",
+      "path": "%APPDATA%\\kingsoft\\wps",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "WPS 用户配置与文档数据（其 download/addons 子目录另有规则覆盖）"
+    },
+    {
+      "id": "vscode-user-config",
+      "path": "%APPDATA%\\Code\\User",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "VSCode 用户配置、键位与代码片段"
+    },
+    {
+      "id": "chrome-user-profile",
+      "path": "%LOCALAPPDATA%\\Google\\Chrome\\User Data",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "Chrome 用户配置档（书签、密码、登录态；其缓存子目录另有 safe 规则覆盖）"
+    },
+    {
+      "id": "jetbrains-config",
+      "path": "%APPDATA%\\JetBrains",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "JetBrains IDE 配置、插件与项目历史（其缓存子目录在 Local 下另有规则）"
+    },
+    {
+      "id": "docker-data",
+      "path": "%LOCALAPPDATA%\\Docker",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "Docker Desktop 数据与 WSL 后端；只能通过 Docker 自身工具管理"
+    },
+    {
+      "id": "wsl-vhdx",
+      "path": "%LOCALAPPDATA%\\Packages\\*\\LocalState\\*.vhdx",
+      "kind": "file",
+      "grade": "protected",
+      "overridable": false,
+      "reason": "WSL 发行版虚拟磁盘；删除会销毁整个 Linux 环境，只能通过 WSL 工具导出/迁移"
+    },
+    { "id": "any-vhdx", "path": "%USERPROFILE%\\*.vhdx", "kind": "file", "grade": "protected", "overridable": false, "reason": "虚拟磁盘文件，可能是 WSL/Docker/虚拟机数据" },
+    { "id": "pagefile", "path": "%SYSTEMDRIVE%\\pagefile.sys", "kind": "file", "grade": "protected", "overridable": false, "reason": "系统页面文件" },
+    { "id": "hiberfil", "path": "%SYSTEMDRIVE%\\hiberfil.sys", "kind": "file", "grade": "protected", "overridable": false, "reason": "休眠文件，只能通过 powercfg 关闭休眠来回收" },
+    { "id": "swapfile", "path": "%SYSTEMDRIVE%\\swapfile.sys", "kind": "file", "grade": "protected", "overridable": false, "reason": "系统交换文件" },
+    { "id": "program-files", "path": "%PROGRAMFILES%", "grade": "protected", "overridable": false, "reason": "已安装程序目录，禁止自动清理" },
+    { "id": "program-files-x86", "path": "%PROGRAMFILES(X86)%", "grade": "protected", "overridable": false, "reason": "已安装 32 位程序目录，禁止自动清理" },
+    { "id": "windows-dir", "path": "%WINDIR%", "grade": "protected", "overridable": false, "reason": "Windows 系统目录，禁止自动清理" }
+  ],
+  "longTermActions": [
+    {
+      "id": "relocate-npm-cache",
+      "title": "npm 缓存迁移到其他盘",
+      "detect": "%LOCALAPPDATA%\\npm-cache 存在且大于 500 MB",
+      "action": "npm config set cache \"<其他盘>:\\npm-cache\"（并把已有缓存内容复制过去）",
+      "benefit": "避免包缓存持续占用 C 盘"
+    },
+    {
+      "id": "relocate-pip-cache",
+      "title": "pip / uv 缓存重定向",
+      "detect": "PIP_CACHE_DIR / UV_CACHE_DIR 未设置",
+      "action": "设置用户环境变量 PIP_CACHE_DIR、UV_CACHE_DIR 指向其他盘",
+      "benefit": "Python 工具链缓存不再写 C 盘"
+    },
+    {
+      "id": "enable-storage-sense",
+      "title": "开启 Windows 存储感知",
+      "detect": "HKCU\\...\\StorageSense\\Parameters\\StoragePolicy\\01 != 1",
+      "action": "注册表设置 01=1（启用）、04=1（删临时文件）、08=1（每天）、32=30（回收站 30 天）、64=0（不自动清下载）",
+      "benefit": "系统自动定期清理临时文件与回收站"
+    },
+    {
+      "id": "check-wsl-docker-location",
+      "title": "核查 WSL / Docker 虚拟磁盘位置",
+      "detect": "在 C 盘发现 *.vhdx",
+      "action": "用 WSL 导出导入或 Docker Desktop 设置把数据盘移到其他盘",
+      "benefit": "虚拟磁盘常增长到数十 GB，是最隐蔽的 C 盘占用源"
+    },
+    {
+      "id": "move-large-projects",
+      "title": "大型开发数据放其他盘",
+      "detect": "用户项目/node_modules 位于 C 盘",
+      "action": "把项目目录、JetBrains/IDE 项目迁到其他盘；必要时用 junction 迁移插件与缓存目录",
+      "benefit": "从根源避免 C 盘被开发数据吞掉"
+    },
+    {
+      "id": "schedule-disk-cleanup",
+      "title": "定期运行系统磁盘清理",
+      "detect": "从未执行过 cleanmgr",
+      "action": "定期以管理员运行 cleanmgr /sagerun:NN（含更新清理、传递优化文件）",
+      "benefit": "持续回收系统级缓存"
+    }
+  ]
+}
