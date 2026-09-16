@@ -11,7 +11,7 @@
  * 运行：npm run m5:client
  */
 import { readFileSync } from 'node:fs';
-import { confirmGate } from '../client/src/panel.js';
+import { confirmGate, noticeText, type Notice } from '../client/src/panel.js';
 import { Fragment, createElement, jsxImpl, reactStub, resetHooks } from './helpers/react-stub.js';
 
 const bundlePath = new URL('../client/client.js', import.meta.url);
@@ -520,6 +520,36 @@ console.log('\n--- 8. 「确认执行」门禁 ---');
     '8.8 提示样式是小字次要色（看得见但不抢眼）',
     /font-size:12px/.test(hintBlock) && /label-secondary/.test(hintBlock),
     hintBlock.slice(0, 90),
+  );
+}
+
+// ---------- 9. 提示句跟随语言（不再冻结在生成时的语言） ----------
+console.log('\n--- 9. 提示句的语言跟随 ---');
+{
+  const notice: Notice = { key: 'notice.scanDone', params: { safe: '1 GB', caution: '2 GB', migrate: '3 GB' } };
+  const zh = noticeText(notice, zhTranslate);
+  const en = noticeText(notice, enTranslate);
+  check('9.1 同一个提示对象在中英两种语言下出不同文案', zh !== en && zh.length > 0 && en.length > 0, `${zh} ｜ ${en}`);
+  check('9.2 中文环境出中文、英文环境不出中文（且参数照旧替换）', /\p{Script=Han}/u.test(zh) && !/\p{Script=Han}/u.test(en) && en.includes('1 GB'));
+  const withExtra: Notice = { ...notice, extraKey: 'notice.previewElevation', extraParams: { count: 3 } };
+  check(
+    '9.3 附加句（如"其中 N 项需要管理员权限"）也按当前语言拼在后面',
+    noticeText(withExtra, enTranslate).endsWith(enTranslate('notice.previewElevation', { count: 3 })) &&
+      /\p{Script=Han}/u.test(noticeText(withExtra, zhTranslate)),
+  );
+  check('9.4 没有提示时返回空串（不渲染空提示框）', noticeText(undefined, zhTranslate) === '');
+  const source = readFileSync(new URL('../client/src/panel.tsx', import.meta.url), 'utf8');
+  // 注释里会举反例（"以前写成 setNotice(t(...))"），先剥掉注释再检查，否则检查自己被自己的注释绊倒
+  const code = source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  const noticeCalls = (code.match(/setNotice\(/g) ?? []).length;
+  check(
+    '9.5 面板里所有 setNotice 传的都是「键 + 参数」而不是渲染好的字符串',
+    !/setNotice\(\s*t\(/.test(code) && noticeCalls >= 4,
+    `setNotice 调用 ${noticeCalls} 处，其中没有直接传 t(...) 的`,
+  );
+  check(
+    '9.6 语言变化时会向宿主重取缓存视图（scan-view），而不是要求用户重扫',
+    /api\.scanView\(\)/.test(source) && /\[api, t\]/.test(source.replace(/\s+/g, ' ')),
   );
 }
 

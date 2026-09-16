@@ -166,6 +166,14 @@ export class PanelApi {
     return this.call<ScanView>('scan', { scope });
   }
 
+  /**
+   * 用宿主**缓存里那次扫描**重新出视图（切界面语言后调用）。
+   * 不扫盘、不测量：宿主只把已经分类好的结果按目标语言重新渲染一遍，毫秒级返回。
+   */
+  scanView(): Promise<{ available: boolean; view?: ScanView }> {
+    return this.call<{ available: boolean; view?: ScanView }>('scan-view');
+  }
+
   preview(paths: string[], mode: 'trash' | 'permanent'): Promise<PreviewView> {
     return this.call<PreviewView>('preview', { paths, mode });
   }

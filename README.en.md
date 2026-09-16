@@ -87,6 +87,12 @@ The tool returns drive info, reclaimable bytes per tier, the biggest top-N consu
 
 The plugin registers a **conversation view tab** in the Web GUI (`conversation.view`, an additive `list` slot — it never replaces or destroys any existing surface). Open any session, switch to "Disk cleanup", and go from "understand" to "select → preview → execute" without leaving the page.
 
+Real screenshots (same scan, two UI languages):
+
+| English UI | 中文界面 |
+| --- | --- |
+| ![Disk cleanup panel, English UI](assets/preview-en.jpg) | ![磁盘清理面板中文界面](assets/preview-zh.jpg) |
+
 The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
 
 The toolbar is laid out as three tight groups with a right-pointing arrow after the first two, left to right:
@@ -115,13 +121,15 @@ The arrows are purely decorative (`aria-hidden`, skipped by screen readers) and 
 
 Both the panel and the host text exist as **two complete sets** and follow the DSH locale automatically — there is no language switcher to click:
 
-- UI strings live in the client dictionary (`client/src/i18n.ts`, 112 keys per language). The tab label is a **thunk**, so switching the locale retitles the tab without re-registering anything;
+- UI strings live in the client dictionary (`client/src/i18n.ts`, 115 keys per language, key sets identical). The tab label is a **thunk**, so switching the locale retitles the tab without re-registering anything;
 - Every panel call on the host RPC carries the current `locale`, so **host-generated text switches too**: every rule reason, all 12 safety-gate refusal sentences, the executor's per-item planned actions, migration config hints, and the scheduler status. English strings live in `src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id (101 rules + 6 long-term actions, guarded by tests that check coverage *and* that no Han character leaks into the English file);
+- **Switching the locale never makes you rescan** (the `scan-view` endpoint): rule reasons and truncation warnings are strings the host rendered *at scan time*, so they would normally stay in the old language. The host therefore exposes "re-render the cached scan in the target language" (no disk access, no measurements — measured at 0 ms), and the panel calls it whenever the locale changes, re-running the preview and migration preview alongside it so the UI is never half-translated (a real screenshot exposed exactly this);
+- **Notices store a key + params**, not a rendered string (`Notice` in `client/src/panel.tsx`): the text is produced at render time with the current `t`, so "Scan complete…" / "Preview ready…" follow the locale instead of freezing in the language they were created in (the type also forbids passing a plain string);
 - **Chinese is the default**: the model tool path (`disk_cleanup`) never passes `locale`, so tool output is byte-for-byte what it always was; only the Web panel sends `en`;
 - A missing English entry always falls back to the Chinese original — never to an empty string;
 - **Wiring has an ordering requirement**: dictionaries must be registered *before* the framework renders a registration that declares `locale:`, so the client plugin waits for the locale service with `ctx.inject(['locale'])`. `dsh.client.inject` therefore lists `@deepseek-ai/dsh-client-locale` too — that is a package-metadata change, so the first upgrade needs a **`dsh web` restart**; after that, text changes only need a page refresh.
 
-Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
+Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `scan-view` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
 
 **What it takes to go live** (platform mechanics, not a plugin choice):
 

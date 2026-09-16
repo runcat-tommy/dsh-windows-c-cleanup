@@ -38,6 +38,7 @@ import {
 import { guardTargets } from '../src/executor/safety.js';
 import { loadDefaultRules } from '../src/rules/load.js';
 import { buildRuleIndex } from '../src/rules/match.js';
+import { partialReasonText } from '../src/scanner/index.js';
 
 const MB = 1024 * 1024;
 const sandbox = path.join(os.tmpdir(), 'dsh-cc-m5-sandbox');
@@ -515,9 +516,69 @@ async function main(): Promise<void> {
     elevationDrops.map((rule) => rule.id).join(',') || '全部保留',
   );
 
+  // ---------- 11. 切语言：用缓存重新出视图（不重扫） ----------
+  console.log('\n--- 11. 切语言后的缓存重渲染 ---');
+
+  // 截断理由是"结构化事实 + 按语言渲染"，不能只存冻死的字符串
+  const factZh = partialReasonText({ kind: 'hotspots-incomplete', scanned: 65, total: 109 }, 'zh');
+  const factEn = partialReasonText({ kind: 'hotspots-incomplete', scanned: 65, total: 109 }, 'en');
+  check(
+    '11.1 截断理由按语言渲染，且数字与总数都不能翻丢',
+    hasHan(factZh) && !hasHan(factEn) && factEn.includes('65') && factEn.includes('109'),
+    `${factZh} ｜ ${factEn}`,
+  );
+  check(
+    '11.2 三条截断原因都有英文版（实测截图里那条告警就是它）',
+    [
+      { kind: 'hotspots-incomplete', scanned: 1, total: 2 },
+      { kind: 'hotspots-truncated' },
+      { kind: 'toptree-timeout' },
+    ].every((fact) => {
+      const zh = partialReasonText(fact as Parameters<typeof partialReasonText>[0], 'zh');
+      const en = partialReasonText(fact as Parameters<typeof partialReasonText>[0], 'en');
+      return hasHan(zh) && !hasHan(en) && zh !== en;
+    }),
+  );
+
+  const cachedZh = (await endpoints['scan-view']({ locale: 'zh' })) as { available: boolean; view?: { planId: string; at: string; groups: { safe: { count: number; bytes: number; items: Array<{ reason: string }> } } } };
+  const viewEnStart = Date.now();
+  const cachedEn = (await endpoints['scan-view']({ locale: 'en' })) as typeof cachedZh;
+  const viewEnMs = Date.now() - viewEnStart;
+  check(
+    '11.3 scan-view 用缓存出视图：同一份扫描（planId 与时间戳一致，没有重扫）',
+    cachedZh.available === true &&
+      cachedEn.available === true &&
+      cachedZh.view?.planId === cachedEn.view?.planId &&
+      cachedZh.view?.at === cachedEn.view?.at,
+    `${cachedZh.view?.planId} / ${cachedEn.view?.planId}｜耗时 ${viewEnMs}ms`,
+  );
+  check(
+    '11.4 缓存重渲染是毫秒级的（真重扫要 70s 起步，这里必须不碰盘）',
+    viewEnMs < 5000,
+    `${viewEnMs}ms`,
+  );
+  const cachedReasonsEn = (cachedEn.view?.groups.safe.items ?? []).map((item) => item.reason);
+  check(
+    '11.5 重新出视图后规则说明是目标语言（切英文不再残留中文）',
+    cachedReasonsEn.length > 0 && cachedReasonsEn.every((reason) => !hasHan(reason)),
+    `样本：${cachedReasonsEn.slice(0, 2).join(' ｜ ')}`,
+  );
+  check(
+    '11.6 同一份缓存的分类结果不变（只换语言，不换数据）',
+    cachedZh.view?.groups.safe.count === cachedEn.view?.groups.safe.count &&
+      cachedZh.view?.groups.safe.bytes === cachedEn.view?.groups.safe.bytes,
+    `${cachedZh.view?.groups.safe.count} 项 / ${cachedZh.view?.groups.safe.bytes} B`,
+  );
+  // 删掉 11.7（见 §8.3：lastScan 是模块级单例，得在 disposePanelJobs 之后才谈"没有缓存"）
+
+
   // ---------- 8. 卸载清理 ----------
   console.log('\n--- 8. 卸载与清理 ---');  disposePanelJobs();
   check('8.1 卸载后任务表清空（面板会显示「任务已随宿主重启消失」）', panelProgress(started.jobId).found === false);
+  check(
+    '8.3 卸载/宿主重启后没有缓存扫描：scan-view 明确回 available=false（面板保持原样，不报错）',
+    ((await endpoints['scan-view']({ locale: 'en' })) as { available: boolean }).available === false,
+  );
   check('8.2 面板报告目录默认落在历史文件旁的 reports/', panelOutputDir({} as Config) === path.join(path.dirname(defaultHistoryPath()), 'reports'), panelOutputDir({} as Config));
 
   // ---------- 清理 ----------

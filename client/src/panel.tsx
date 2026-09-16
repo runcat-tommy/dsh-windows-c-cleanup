@@ -34,6 +34,25 @@ type TierKey = 'safe' | 'caution' | 'migrate' | 'protected';
  */
 export type ConfirmGate = 'busy' | 'no-selection' | 'need-preview' | 'stale-preview' | 'ready';
 
+/**
+ * 一条提示句：**只存键与参数**，渲染时才用当前语言的 `t` 取文案。
+ * 存渲染结果会让文案冻结在生成它的那个语言上（切语言后仍是旧语言）。
+ */
+export interface Notice {
+  key: string;
+  params?: Record<string, string | number>;
+  /** 附加键：有值时拼在后面（例如预演提示后面追加"需要 N 项管理员权限"） */
+  extraKey?: string;
+  extraParams?: Record<string, string | number>;
+}
+
+export function noticeText(notice: Notice | undefined, t: Translate): string {
+  if (notice === undefined) return '';
+  const head = t(notice.key, notice.params);
+  if (notice.extraKey === undefined) return head;
+  return head + t(notice.extraKey, notice.extraParams);
+}
+
 export function confirmGate(input: {
   selectedCount: number;
   previewed: boolean;
@@ -216,10 +235,19 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
   const [preview, setPreview] = useState<PreviewView | undefined>(undefined);
   const [previewKey, setPreviewKey] = useState('');
   const [migration, setMigration] = useState<MigratePreviewView | undefined>(undefined);
+  /** 上次做迁移预览的路径：切语言时据此原样重跑一次，让文案跟上语言 */
+  const [migrationPaths, setMigrationPaths] = useState<string[] | undefined>(undefined);
   const [job, setJob] = useState<JobView | undefined>(undefined);
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
-  const [notice, setNotice] = useState('');
+  /**
+   * 提示句存的是**键 + 参数**，不是渲染好的字符串。
+   *
+   * 为什么（0.5.1 修正）：以前 `setNotice(t('notice.scanDone', …))` 把当时语言的结果冻在 state 里，
+   * 用户切到英文后，扫描提示仍然是中文（实测截图里就是这样）。存键 + 参数，渲染时再取当前 `t`，
+   * 语言一换提示句跟着换。类型上也彻底堵住：`Notice` 是对象，传字符串编译不过。
+   */
+  const [notice, setNotice] = useState<Notice | undefined>(undefined);
   const [confirmPermanent, setConfirmPermanent] = useState(false);
   const [helpOpen, setHelpOpen] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
@@ -268,6 +296,60 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
 
   const selectionKey = useMemo(() => [...selected].sort().join('\n'), [selected]);
 
+  /**
+   * 语言变了就把「宿主已经渲染好的文案」重新要一遍。
+   *
+   * 扫描结果、逐项理由、截断原因、预演里的每一项理由，都是宿主在**生成那一刻**按当时语言渲染好的
+   * 字符串；面板把它们缓存在 state 里，切语言不会自动变。用户实测就是这个现象：切到英文后，
+   * 界面框架是英文的，规则说明却还是中文。
+   *
+   * 这里只做三件事，都是廉价调用（不扫盘、不真删）：
+   *  1. scan-view：让宿主用**缓存里那次扫描**按新语言重新出视图（毫秒级，零磁盘 I/O）；
+   *  2. 若已有预演，按同一份勾选 + 模式重跑预演（dryRun，只读）；
+   *  3. 若已有迁移预览，按同样的路径重跑（会重新测量，故只在用户确实在看时才做）。
+   *
+   * 只依赖 `t`（语言变化时才触发，首次挂载不请求）；勾选/模式/路径从最新值 ref 里取，
+   * 这样切语言的同时用户还在点勾选也不会把这次刷新打断。
+   */
+  const latestRef = useRef({ selected, mode, migrationPaths, migrationTarget: state?.migrationTarget?.letter });
+  useEffect(() => {
+    latestRef.current = { selected, mode, migrationPaths, migrationTarget: state?.migrationTarget?.letter };
+  });
+  useEffect(() => {
+    let alive = true;
+    void (async () => {
+      try {
+        const cached = await api.scanView();
+        if (alive && cached.available && cached.view !== undefined) setScan(cached.view);
+      } catch {
+        /* 拿不到就让旧视图留着，不打断用户 */
+      }
+      const current = latestRef.current;
+      if (current.selected.size > 0) {
+        try {
+          const result = await api.preview([...current.selected], current.mode);
+          if (alive) {
+            setPreview(result);
+            setPreviewKey([...current.selected].sort().join('\n'));
+          }
+        } catch {
+          /* 预演失败不弹错：语言切换不该打断正在做的事 */
+        }
+      }
+      if (current.migrationPaths !== undefined && current.migrationPaths.length > 0) {
+        try {
+          const result = await api.migratePreview(current.migrationPaths, current.migrationTarget);
+          if (alive) setMigration(result);
+        } catch {
+          /* 同上 */
+        }
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, [api, t]);
+
   const toggle = useCallback((path: string) => {
     setSelected((current) => {
       const next = new Set(current);
@@ -299,20 +381,21 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
   const runScan = useCallback(async () => {
     setBusy(t('busy.scan'));
     setError('');
-    setNotice('');
+    setNotice(undefined);
     try {
       const result = await api.scan(scope);
       setScan(result);
       setSelected(new Set());
       setPreview(undefined);
       setMigration(undefined);
-      setNotice(
-        t('notice.scanDone', {
+      setNotice({
+        key: 'notice.scanDone',
+        params: {
           safe: formatBytes(result.groups.safe.bytes),
           caution: formatBytes(result.groups.caution.bytes),
           migrate: formatBytes(result.groups.migrate.bytes),
-        }),
-      );
+        },
+      });
       await refreshState();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
@@ -332,10 +415,13 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
       const result = await api.preview([...selected], mode);
       setPreview(result);
       setPreviewKey(selectionKey);
-      setNotice(
-        t('notice.previewDone', { size: formatBytes(result.plannedBytes) }) +
-          (result.elevationCount > 0 ? t('notice.previewElevation', { count: result.elevationCount }) : ''),
-      );
+      setNotice({
+        key: 'notice.previewDone',
+        params: { size: formatBytes(result.plannedBytes) },
+        ...(result.elevationCount > 0
+          ? { extraKey: 'notice.previewElevation', extraParams: { count: result.elevationCount } }
+          : {}),
+      });
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
@@ -368,13 +454,15 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
       try {
         const result = await api.migratePreview(paths, state?.migrationTarget?.letter);
         setMigration(result);
-        setNotice(
-          t('notice.migratePreviewDone', {
+        setMigrationPaths(paths);
+        setNotice({
+          key: 'notice.migratePreviewDone',
+          params: {
             count: result.items.length,
             size: formatBytes(result.totalBytes),
             root: result.targetRoot,
-          }),
-        );
+          },
+        });
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
@@ -410,7 +498,14 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
     if (job === undefined) return;
     try {
       const result = await api.cancel(job.jobId);
-      setNotice(result.canceled ? t('notice.cancelRequested') : (result.reason ?? t('notice.cancelFailed')));
+      // 宿主返回的 reason 是它自己渲染的句子（无法本地化），当作参数塞进本地模板里
+      setNotice(
+        result.canceled
+          ? { key: 'notice.cancelRequested' }
+          : result.reason === undefined
+            ? { key: 'notice.cancelFailed' }
+            : { key: 'notice.cancelFailedWithReason', params: { reason: result.reason } },
+      );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
@@ -580,7 +675,7 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
       ) : null}
 
       {busy !== '' ? <div className="wcc_status">⏳ {busy}</div> : null}
-      {notice !== '' ? <div className="wcc_notice">{notice}</div> : null}
+      {notice === undefined ? null : <div className="wcc_notice">{noticeText(notice, t)}</div>}
       {error !== '' ? <div className="wcc_error">⚠️ {error}</div> : null}
 
       {scan === undefined ? (

@@ -174,6 +174,12 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 
 插件在 Web GUI 里注册一个**对话视图 tab**（`conversation.view`，additive list 插槽，不覆盖任何现有界面）：打开任意会话，切到「磁盘清理」就能完成「看懂 → 勾选 → 预演 → 执行」。
 
+实拍（同一份扫描结果，两种界面语言）：
+
+| 中文界面 | English UI |
+| --- | --- |
+| ![磁盘清理面板中文界面](assets/preview-zh.jpg) | ![Disk cleanup panel, English UI](assets/preview-en.jpg) |
+
 面板是**薄的**：它不做任何业务判断，分级、安全闸、测量、释放量核算全部复用宿主侧既有模块；面板调用的「预演」和「真执行」走的是**同一个 `executeCleanup`**（只有 `dryRun` 不同），所以预演里出现的每一项、每个理由都与真执行一致。
 
 工具栏按「同组相邻」排成三组，组间各有一个向右箭头标明先后关系，从左到右：
@@ -202,13 +208,15 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 
 面板与宿主文案都是**中英两套**，跟随 DSH 的语言设置自动切换，不需要手动选语言：
 
-- 界面文案由客户端字典提供（`client/src/i18n.ts`，中英各 112 条），tab 标题是**函数式标签**，语言一换标题即跟着换，无需重新注册；
+- 界面文案由客户端字典提供（`client/src/i18n.ts`，中英各 115 条，键集合严格一致），tab 标题是**函数式标签**，语言一换标题即跟着换，无需重新注册；
 - 面板每次调用宿主 RPC 都会带上当前 `locale`，所以**宿主生成的文案**也跟着切换：规则库的每一条判定理由、安全闸的 12 条拒绝理由、执行器的逐项计划动作、迁移配置提示、调度状态。英文文案放在 `src/rules/default-rules.en.json`，按规则 id 与中文严格对齐（101 条规则 + 6 条长期防护，有测试守着覆盖率和「英文里不得出现中文」）；
+- **切语言不会让你重扫一遍**（`scan-view` 端点）：扫描结果里的规则说明、截断告警都是宿主**生成那一刻**渲染好的字符串，切语言本来不会变——所以宿主额外提供「用缓存里那次扫描按目标语言重新出视图」（不碰盘、不测量，实测 0ms），面板在语言变化时自动调它，并顺带重跑一次预演与迁移预览，让界面不再中英混杂（实测截图暴露过这个问题）；
+- **提示句存的是「键 + 参数」**（`Notice`，见 `client/src/panel.tsx`）：渲染时才取当前语言的 `t`，所以「扫描完成…」「预演完成…」这类提示会跟着语言切换，而不是冻结在生成时的语言（类型上也堵住了：传字符串编译不过）；
 - **默认中文**：模型工具（`disk_cleanup`）那条路不传 `locale`，输出与历史完全一致；只有 Web 面板会传 `en`；
 - 英文缺项一律回退中文原文，宁可显示中文也不显示空洞；
 - **接线有时序要求**：字典必须在框架渲染带 `locale:` 的注册项**之前**登记好，所以客户端插件用 `ctx.inject(['locale'])` 等语言服务就绪再接线；相应地 `dsh.client.inject` 里也声明了 `@deepseek-ai/dsh-client-locale`（这属于包元数据变更 → 首次升级要**重启 `dsh web`**，之后改文案只刷新页面即可）。
 
-浏览器与宿主之间走 Connection 的通用 RPC 通道 `/dsh-c-cleanup`（`authority: loopback`，只接受本机调用），端点包括 `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` 等。任务表是宿主内存态，宿主重启即清空。
+浏览器与宿主之间走 Connection 的通用 RPC 通道 `/dsh-c-cleanup`（`authority: loopback`，只接受本机调用），端点包括 `state` / `scan` / `scan-view` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` 等。任务表是宿主内存态，宿主重启即清空。
 
 **落地条件**（平台机制决定，不是本插件的选择）：
 

@@ -41,11 +41,11 @@ import { buildPlan } from '../planner/index.js';
 import { renderExecutionReport } from '../report/execution.js';
 import { buildRuleIndex, pickWinner } from '../rules/match.js';
 import { loadRules } from '../rules/load.js';
-import type { ClassifiedItem, Plan } from '../rules/schema.js';
+import type { ClassifiedItem, DriveInfo, Plan } from '../rules/schema.js';
 import { driveRoot } from '../util/drive.js';
 import { formatBytes, nowStamp } from '../util/format.js';
 import { listDrives, pickMigrationTarget, readFreeSpace } from '../scanner/drives.js';
-import { scanSystem } from '../scanner/index.js';
+import { scanSystem, partialReasonText, type PartialFact } from '../scanner/index.js';
 import { measurePath } from '../scanner/size.js';
 
 const GB = 1024 ** 3;
@@ -261,6 +261,7 @@ export async function panelScan(
   const scan = await scanSystem(
     ruleSet,
     {
+      locale,
       hotspotTimeBudgetMs: config.hotspotTimeBudgetMs,
       topTree: {
         enabled: scope === 'full',
@@ -291,12 +292,26 @@ export async function panelScan(
   const previous = previousScan(entries, plan.id);
 
   lastScan = { plan, classified, at: new Date().toISOString(), scope };
-  const system = scan.drives.find((drive) => drive.isSystem);
 
+  return scanViewOf(lastScan, locale, {
+    drives: scan.drives,
+    historyPath,
+    trend: previous === undefined ? undefined : computeTrend(previous, entry),
+  });
+}
+
+/** 把一次扫描（或缓存里的那次）渲染成面板视图：**同一个函数**给首扫和"切语言后重出视图"用 */
+function scanViewOf(
+  scan: NonNullable<typeof lastScan>,
+  locale: LocaleId,
+  options: { drives: DriveInfo[]; historyPath: string; trend?: Trend },
+): PanelScanResult {
+  const plan = scan.plan;
+  const system = options.drives.find((drive) => drive.isSystem);
   return {
     planId: plan.id,
-    at: lastScan.at,
-    scope,
+    at: scan.at,
+    scope: scan.scope,
     systemDrive: system?.letter ?? 'C',
     freeBytes: system?.freeBytes ?? 0,
     totalBytes: system?.totalBytes ?? 0,
@@ -316,9 +331,42 @@ export async function panelScan(
       grade: item.grade,
     })),
     partial: plan.partial,
-    partialReasons: plan.scanStats.partialReasons,
-    historyPath,
-    ...(previous === undefined ? {} : { trend: computeTrend(previous, entry) }),
+    // 截断理由按**目标语言**重新渲染（存的是结构化事实，不是冻死的字符串）
+    partialReasons: partialReasonList(plan.scanStats, locale),
+    historyPath: options.historyPath,
+    ...(options.trend === undefined ? {} : { trend: options.trend }),
+  };
+}
+
+/** 截断理由：结构化事实优先；老缓存（0.5.1 之前只有字符串）回退到字符串 */
+function partialReasonList(stats: Plan['scanStats'], locale: LocaleId): string[] {
+  const facts = (stats as { partialFacts?: PartialFact[] }).partialFacts;
+  if (facts === undefined || facts.length === 0) return stats.partialReasons;
+  return facts.map((fact) => partialReasonText(fact, locale));
+}
+
+/**
+ * 用**缓存里那次扫描**重新出视图（0.5.1 新增）。
+ *
+ * 存在的理由：切界面语言时不能让用户重扫一遍（70s+），也不能让他继续看中文 ——
+ * 扫描结果里的规则说明、截断理由都是宿主在扫描那一刻按当时语言渲染好的字符串。
+ * 这里不碰盘、不测量，只把缓存的分类结果按目标语言重新渲染一遍（毫秒级）。
+ */
+export async function panelScanView(
+  config: Config,
+  args: { locale?: LocaleId } = {},
+): Promise<{ available: boolean; view?: PanelScanResult }> {
+  const scan = lastScan;
+  if (scan === undefined) return { available: false };
+  const locale = normalizeLocale(args.locale);
+  const historyPath = config.historyPath ?? defaultHistoryPath();
+  const entries = await readHistory(historyPath);
+  const previous = previousScan(entries, scan.plan.id);
+  const entry = entries.find((item) => item.id === scan.plan.id);
+  const trend = previous === undefined || entry === undefined ? undefined : computeTrend(previous, entry);
+  return {
+    available: true,
+    view: scanViewOf(scan, locale, { drives: scan.plan.drives, historyPath, trend }),
   };
 }
 

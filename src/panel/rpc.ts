@@ -52,6 +52,8 @@ export function panelEndpoints(
     state: () => panel.panelState(config),
     scan: (payload) =>
       panel.panelScan(config, { scope: payload.scope === 'full' ? 'full' : 'hotspots', locale: localeOf(payload) }),
+    // 用缓存里那次扫描重新出视图（切界面语言后调用；不扫盘、不测量）
+    'scan-view': (payload) => panel.panelScanView(config, { locale: localeOf(payload) }),
     preview: (payload) =>
       panel.panelPreview(config, {
         ...(Array.isArray(payload.paths) ? { paths: payload.paths as string[] } : {}),
