@@ -16,6 +16,7 @@ import type { ElevatedResult, ElevatedTask } from './elevate.js';
 import { isElevated, runElevated, taskDismComponentCleanup, taskDiskCleanup, taskRemoveDirectory } from './elevate.js';
 import { guardTargets } from './safety.js';
 import { moveToTrash } from './trash.js';
+import { normalizeLocale, pick, ruleReason, type LocaleId } from '../i18n/index.js';
 
 export interface ExecuteRequest {
   /** 目标路径（通常来自扫描结果或用户点选） */
@@ -35,6 +36,11 @@ export interface ExecuteRequest {
   onProgress?: (message: string) => void;
   /** 每有一条结果落表就回调一次（索引为该项在结果表中的位置），供 GUI 显示逐项进度 */
   onItem?: (item: ExecutedItem, index: number) => void;
+  /**
+   * 结果文案语言（默认中文）：只有 Web 面板会传 'en'，
+   * 模型工具与报告不传，行为与历史完全一致。
+   */
+  locale?: LocaleId;
   signal?: AbortSignal;
 }
 
@@ -106,6 +112,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
   const elevationTasks: ElevatedTask[] = [];
   const log = request.onProgress ?? (() => {});
   const root = driveRoot(request.systemDrive);
+  const locale = normalizeLocale(request.locale);
   const windir = process.env.WINDIR ?? '';
   const programData = process.env.ProgramData ?? '';
 
@@ -117,12 +124,13 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
     request.onItem?.(item, items.length - 1);
   };
 
-  log(`安全闸校验 ${request.targets.length} 个目标…`);
+  log(pick(locale, `安全闸校验 ${request.targets.length} 个目标…`, `Checking ${request.targets.length} targets against the safety gate…`));
   const guards = await guardTargets(request.targets, {
     index: request.index,
     systemDrive: request.systemDrive,
     allowExplicitUnmatched: request.allowExplicitUnmatched,
     allowProtectedOverride: request.allowProtectedOverride,
+    locale,
   });
 
   for (const refused of guards.refused) {
@@ -157,7 +165,9 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
         sizeBefore: knownSize,
         freedBytes: 0,
         remainingBytes: 0,
-        reason: request.dryRun ? '需要管理员权限：将在提权阶段执行' : '需要管理员权限，已加入提权任务',
+        reason: request.dryRun
+          ? pick(locale, '需要管理员权限：将在提权阶段执行', 'Administrator rights required: will run in the elevation phase')
+          : pick(locale, '需要管理员权限，已加入提权任务', 'Administrator rights required, added to the elevation queue'),
       });
       continue;
     }
@@ -179,13 +189,21 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
         remainingBytes: 0,
         reason:
           request.mode === 'trash'
-            ? `将移动到暂存区 ${request.trashPath ?? '（未指定）'}`
-            : `将永久删除（${allowed.reason}）`,
+            ? pick(
+                locale,
+                `将移动到暂存区 ${request.trashPath ?? '（未指定）'}`,
+                `Will move to the staging area ${request.trashPath ?? '(not specified)'}`,
+              )
+            : pick(
+                locale,
+                `将永久删除（${ruleReason(allowed.ruleId, allowed.reason, locale)}）`,
+                `Will delete permanently (${ruleReason(allowed.ruleId, allowed.reason, locale)})`,
+              ),
       });
       continue;
     }
 
-    log(`处理 ${allowed.path}…`);
+    log(pick(locale, `处理 ${allowed.path}…`, `Processing ${allowed.path}…`));
     if (request.mode === 'trash') {
       if (!request.trashPath) {
         record({
@@ -195,7 +213,11 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
           sizeBefore: knownSize,
           freedBytes: 0,
           remainingBytes: 0,
-          reason: 'trash 模式必须提供 trashPath（且应位于其他盘）',
+          reason: pick(
+            locale,
+            'trash 模式必须提供 trashPath（且应位于其他盘）',
+            'staging mode requires a trashPath (and it should live on another drive)',
+          ),
         });
         continue;
       }
@@ -219,10 +241,10 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
         remainingBytes: Math.max(0, outcome.sizeBefore - outcome.freedBytes),
         reason:
           outcome.status === 'same-volume'
-            ? outcome.errors[0] ?? '暂存区与源同盘'
+            ? outcome.errors[0] ?? pick(locale, '暂存区与源同盘', 'the staging area sits on the same drive as the source')
             : outcome.status === 'trashed'
-              ? `已移动到 ${outcome.movedTo}`
-              : outcome.errors.join('；') || '移动未完成',
+              ? pick(locale, `已移动到 ${outcome.movedTo}`, `Moved to ${outcome.movedTo}`)
+              : outcome.errors.join('；') || pick(locale, '移动未完成', 'the move did not complete'),
         movedTo: outcome.movedTo,
       });
       if (outcome.errors.length > 0 && outcome.status !== 'trashed') errors.push(...outcome.errors.slice(0, 3));
@@ -249,8 +271,11 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
       remainingBytes: outcome.remainingBytes,
       reason:
         outcome.status === 'deleted'
-          ? '已彻底删除'
-          : outcome.errors[0] ?? (outcome.status === 'needs-elevation' ? '需要管理员权限' : '删除未完成'),
+          ? pick(locale, '已彻底删除', 'Deleted permanently')
+          : outcome.errors[0] ??
+            (outcome.status === 'needs-elevation'
+              ? pick(locale, '需要管理员权限', 'Administrator rights required')
+              : pick(locale, '删除未完成', 'the deletion did not complete')),
     });
     if (outcome.errors.length > 0) errors.push(...outcome.errors.slice(0, 3));
   }
@@ -264,20 +289,32 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
 
   let elevation: ElevatedResult | undefined;
   if (!request.dryRun && elevationTasks.length > 0) {
-    log(`触发提权任务（${elevationTasks.length} 项），等待 UAC 授权…`);
+    log(
+      pick(
+        locale,
+        `触发提权任务（${elevationTasks.length} 项），等待 UAC 授权…`,
+        `Triggering ${elevationTasks.length} elevated task(s), waiting for UAC authorization…`,
+      ),
+    );
     elevation = await runElevated(elevationTasks, { onProgress: log });
     if (elevation.canceled) {
       items.forEach((item, index) => {
         if (item.action === 'needs-elevation') {
           item.action = 'elevation-canceled';
-          item.reason = '用户取消了 UAC 授权，未执行';
+          item.reason = pick(locale, '用户取消了 UAC 授权，未执行', 'The user declined the UAC prompt, nothing was executed');
           request.onItem?.(item, index); // 状态改写要补报一次，否则面板仍显示「等待提权」
         }
       });
     }
     if (elevation.errors.length > 0) errors.push(...elevation.errors);
   } else if (request.dryRun && elevationTasks.length > 0) {
-    log(`dryRun：将触发 ${elevationTasks.length} 项提权任务，未实际执行`);
+    log(
+      pick(
+        locale,
+        `dryRun：将触发 ${elevationTasks.length} 项提权任务，未实际执行`,
+        `dryRun: ${elevationTasks.length} elevated task(s) would run, nothing was executed`,
+      ),
+    );
   }
 
   const freeAfter = await freeSpaceOf(root);

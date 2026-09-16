@@ -10,6 +10,7 @@
  */
 import { createElement, type ReactElement } from 'react';
 import { PanelApi, type ConnectionLike } from './api.js';
+import { DICTS, LOCALE_NS, detectLocale, makeTranslate, normalizeLocale, type LocaleId, type Translate } from './i18n.js';
 import { CleanupPanel } from './panel.js';
 
 const STYLE_TAG_ID = 'dsh-windows-c-cleanup/panel.css';
@@ -28,8 +29,20 @@ const PANEL_CSS = `
   background:var(--dsw-alias-bg-subtle,#f6f8fa)}
 .wcc_trend_grown{margin-top:4px;color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}
 .wcc_trend_row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wcc_toolbar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.wcc_toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
+.wcc_group{display:flex;align-items:center;gap:6px}
 .wcc_spacer{flex:1}
+.wcc_help{align-self:center;width:19px;height:19px;padding:0;border-radius:50%;
+  border:1px solid var(--dsw-alias-border-l1,#d0d7de);background:transparent;
+  color:var(--dsw-alias-label-secondary,#57606a);font:inherit;font-size:12px;line-height:1;cursor:pointer}
+.wcc_help:hover{border-color:var(--dsw-alias-border-l2,#8250df);color:var(--dsw-alias-label-primary,#1f2328)}
+.wcc_help_on{background:var(--dsw-alias-brand-primary,#0969da);border-color:transparent;color:#fff}
+.wcc_helpbox{border:1px solid var(--dsw-alias-border-l1,#d0d7de);border-left:3px solid var(--dsw-alias-brand-primary,#0969da);
+  border-radius:8px;padding:10px 12px;background:var(--dsw-alias-bg-subtle,#f6f8fa);
+  display:flex;flex-direction:column;gap:6px;align-items:flex-start}
+.wcc_helpbox_title{font-weight:600}
+.wcc_helpbox_body{white-space:pre-line}
+.wcc_helpbox_limits{color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}
 .wcc_field{display:inline-flex;align-items:center;gap:6px;color:var(--dsw-alias-label-secondary,#57606a)}
 .wcc_field select{background:var(--dsw-alias-bg-base,#fff);color:inherit;border:1px solid var(--dsw-alias-border-l1,#d0d7de);
   border-radius:6px;padding:3px 6px;font:inherit}
@@ -91,9 +104,24 @@ const PANEL_CSS = `
 interface SlotsLike {
   inject(key: string, callback: () => unknown): unknown;
   register(
-    options: { name: string; id: string; order?: number; label?: string },
+    options: {
+      name: string;
+      id: string;
+      order?: number;
+      /** 平台允许 thunk：tab 标题按当前语言现算，不必重新注册 */
+      label?: string | (() => string);
+      /** 声明字典命名空间 → 框架给组件注入 `t` seat，并在语言切换时重新下发 */
+      locale?: string;
+      registrant?: string;
+    },
     component: (props: unknown) => ReactElement | null,
   ): unknown;
+}
+
+interface LocaleRuntimeLike {
+  register(ns: string, locale: string, dict: Record<string, string>): () => void;
+  bind(ns: string): Translate;
+  getLocale(): { active: string; locales: readonly { id: string; label: string }[]; revision: number };
 }
 
 interface ClientContextLike {
@@ -102,7 +130,7 @@ interface ClientContextLike {
   slots: SlotsLike;
 }
 
-/** 硬依赖：插槽注册表。connection 用 ctx.get 软取，不做硬依赖 */
+/** 硬依赖：插槽注册表。connection / locale 都用 ctx.get 软取，不做硬依赖 */
 export const inject = ['slots'];
 
 export function apply(ctx: ClientContextLike): void {
@@ -120,13 +148,48 @@ export function apply(ctx: ClientContextLike): void {
     };
   }, 'windows-c-cleanup: panel css');
 
-  const api = new PanelApi(() => ctx.get('connection') as ConnectionLike | undefined);
+  // 语言：有 locale 服务就登记中英两套字典（平台要求"双语齐备"），并借它的 bind 拿稳定翻译函数；
+  // 没有（非 Web 宿主 / 极简装配）就退回按浏览器语言自选字典，面板照样能用。
+  const locale = ctx.get('locale') as LocaleRuntimeLike | undefined;
+  if (locale !== undefined && typeof locale.register === 'function') {
+    ctx.effect(() => {
+      const disposers = [
+        locale.register(LOCALE_NS, 'zh', DICTS.zh),
+        locale.register(LOCALE_NS, 'en', DICTS.en),
+      ];
+      return () => {
+        for (const dispose of disposers) dispose();
+      };
+    }, 'windows-c-cleanup: locale dicts');
+  }
+  const activeLocale = (): LocaleId =>
+    locale === undefined ? detectLocale() : normalizeLocale(locale.getLocale?.().active);
+  const translate: Translate =
+    locale !== undefined && typeof locale.bind === 'function'
+      ? locale.bind(LOCALE_NS)
+      : makeTranslate(detectLocale());
 
-  // conversation.view：additive list 插槽（replaceRisk: none），注册成对话视图环里的一个整页 tab
+  const api = new PanelApi(
+    () => ctx.get('connection') as ConnectionLike | undefined,
+    () => activeLocale(),
+  );
+
+  // conversation.view：additive list 插槽（replaceRisk: none），注册成对话视图环里的一个整页 tab。
+  // locale: 命名空间 → 框架注入 `t`；label 用 thunk → 语言切换时 tab 标题自动跟随。
   ctx.slots.inject('conversation.view', () =>
     ctx.slots.register(
-      { name: 'conversation.view', id: 'disk-cleanup', order: 40, label: '磁盘清理' },
-      () => createElement(CleanupPanel, { api }),
+      {
+        name: 'conversation.view',
+        id: 'disk-cleanup',
+        order: 40,
+        label: () => translate('tab'),
+        locale: LOCALE_NS,
+        registrant: 'dsh-windows-c-cleanup',
+      },
+      (props: unknown) => {
+        const seat = (props as { t?: Translate } | undefined)?.t;
+        return createElement(CleanupPanel, { api, ...(seat === undefined ? {} : { t: seat }) });
+      },
     ),
   );
 }

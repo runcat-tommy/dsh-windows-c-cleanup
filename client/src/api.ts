@@ -57,7 +57,8 @@ export interface PanelStateView {
   defaultScope: 'hotspots' | 'full';
   historyPath: string;
   reportDir: string;
-  scheduler: { enabled: boolean; description: string };
+  /** 结构化调度状态：面板自己组织成双语文案，不依赖宿主的中文描述 */
+  scheduler: { enabled: boolean; running: boolean; intervalHours: number; alertFreePercent: number };
   lastScan?: {
     planId: string;
     at: string;
@@ -140,7 +141,11 @@ export interface JobView {
 }
 
 export class PanelApi {
-  constructor(private readonly getConnection: () => ConnectionLike | undefined) {}
+  constructor(
+    private readonly getConnection: () => ConnectionLike | undefined,
+    /** 当前界面语言：随每次调用发给宿主，让宿主返回对应语言的文案（规则说明/拒绝理由/告警等） */
+    private readonly getLocale: () => string = () => 'zh',
+  ) {}
 
   private async call<T>(endpoint: string, payload: Record<string, unknown> = {}): Promise<T> {
     const connection = this.getConnection();
@@ -148,7 +153,7 @@ export class PanelApi {
     if (rpc === undefined) {
       throw new Error('当前宿主没有 Connection 服务：面板无法与宿主通信（模型工具仍可用）');
     }
-    const result = await rpc.call(PANEL_CHANNEL, endpoint, payload);
+    const result = await rpc.call(PANEL_CHANNEL, endpoint, { locale: this.getLocale(), ...payload });
     if (result.ok !== true) throw new Error(result.error?.message ?? `调用 ${endpoint} 失败`);
     return result.value as T;
   }

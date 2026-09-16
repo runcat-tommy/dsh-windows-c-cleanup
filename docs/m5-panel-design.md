@@ -89,5 +89,24 @@ idle ──扫描──▶ scanning ──▶ ready(卡片+趋势)
 | 产物形态与 React 来源 | classic script，顶层唯一语句是 `window.__ModuleLoader__.load({ id, factory })`；factory 内只有**静态 seed 表**这 10 个说明符可用（`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、cordis、`dsh-client-ui-slots`、`dsh-client-web-react`、`dsh-client-ui-primitives`、`dsh-client-ui-attachment`、`dsh-client-schema-form`），其它说明符会当场抛错 → 第三方库必须打进 bundle。本插件只用 `react` 与 `react/jsx-runtime`，两者都 external |
 | 客户端→宿主通道 | 静态包不能用 `host.call` / `harness.handle`（那是动态插件专属）；用 `ctx.connection.rpc.handle(channel, handler, { authority: 'loopback' })` + `connection.rpc.call(channel, endpoint, payload)`，通道名须匹配 `/^\/[A-Za-z0-9._~-]+$/`，返回 `RpcResult`（`'internal'` 码必须带 `details: {}`） |
 | 是否要重建/重启 | 包元数据判定被宿主**永久缓存** → 新增/删除包、改 `dsh.client` 字段必须重启 `dsh web`；只改 bundle 内容刷新页面即可（本 profile 的 HMR 关闭：`dsh-web-app/cordis.patch.yml` 里 `- id: hmr` 带 `disabled: true`），产物以 `no-cache` 提供 |
+| 中英双语怎么接（0.5.1 实证回填） | `ctx.locale.register(ns, 'zh'\|'en', dict)` 注册字典（命名空间不在 `LocaleNamespaceMap` 里就走这条未类型化重载）；插槽注册项加 `locale: '<ns>'` 后框架注入 `t` 席位，席位按 `(namespace, revision)` 重算，**语言切换会让已挂载的 outlet 重新渲染**；`label` 可以是 **thunk**，于是 tab 标题跟着语言走而无需重新注册；渲染时若声明了 `locale:` 而宿主没装语言面，框架会**显式报错**（所以字典注册与 `ctx.get('locale')` 判空必须成对写，缺失时退化成"按浏览器语言自选字典"） |
 
-面板落地后的实测口径：`npm run m5`（宿主面 42 项）与 `npm run m5:client`（客户端产物 17 项，离线重放浏览器加载并真渲染一次首屏）全绿。
+## 8. 双语策略（0.5.1）
+
+需求是「UI 与 README 都做中英两套」。落地时按**边界**切开，而不是把中文句子翻译两遍：
+
+| 文案来自哪 | 归属 | 做法 |
+| --- | --- | --- |
+| 面板界面文字（按钮、标题、提示、状态词） | 客户端 | `client/src/i18n.ts` 里的 `ZH`/`EN` 字典（各 112 条），占位符用 `{name}` 插值；测试守「键集合严格一致」「英文值不得含中文」 |
+| 规则库判定理由（101 条） | 宿主 | 中文在 `default-rules.json`，英文在 `default-rules.en.json`，**按 rule id 对齐**（不是按顺序、不是按索引）；缺失回退中文 |
+| 安全闸拒绝理由（12 条）、执行器计划动作、迁移配置提示 | 宿主 | 字符串就写在调用点旁边，`pick(locale, 中文, English)` 二选一——这类句子带运行时变量（路径、大小），放远端目录反而更难维护 |
+| 调度状态 | 宿主 | 不再返回句子，改返回**结构化字段**（`{enabled, running, intervalHours, alertFreePercent}`），由面板按语言组织 |
+| 报告 / 执行记录文件 | 宿主 | **保持中文**（这是落到磁盘、给模型与用户看的归档物，不是界面），已在文档中写明 |
+
+三条硬约定：
+
+1. **默认中文**：`normalizeLocale()` 只认 `'en'`，其余一律回中文；模型工具路径不传 `locale`，所以工具输出与历史逐字一致（有测试 10.4 守着）。
+2. **回退优先于空洞**：任何英文缺项都回退中文原文（10.5），界面永远不会出现空字符串或 key 名。
+3. **两端各自判定，不互相猜**：客户端用平台 `locale` 服务（缺失才退化到 `navigator.language`），宿主只信 payload 里的 `locale` 字段；两边都不做"探测对方语言"的小聪明。
+
+面板落地后的实测口径：`npm run m5`（宿主面 52 项）与 `npm run m5:client`（客户端产物 32 项，离线重放浏览器加载、中英各真渲染一次首屏）全绿。

@@ -5,6 +5,9 @@
  * 它只做四件事：渲染、收集勾选、按「预演 → 确认 → 执行」两步发起 RPC、轮询进度。
  * 面板里唯一的安全规则是"提前告知"（保护层不可勾选、永久删除要二次确认），
  * 真正的防线在宿主侧 guardTargets —— UI 不是唯一防线。
+ *
+ * 文案全部走 `t`（平台在插槽声明 `locale:` 后注入的翻译 seat）：
+ * 语言切换时框架会下发新的 `t`，组件随之重渲染，不需要自己订阅 locale 变化。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { JSX } from 'react';
@@ -19,15 +22,41 @@ import {
   type ScanView,
   type TrendView,
 } from './api.js';
+import { detectLocale, makeTranslate, type Translate } from './i18n.js';
 
 type TierKey = 'safe' | 'caution' | 'migrate' | 'protected';
 
-const TIERS: Array<{ key: TierKey; icon: string; title: string; hint: string }> = [
-  { key: 'safe', icon: '🟢', title: '可安全删除', hint: '缓存/日志/临时文件，删了会自动重建' },
-  { key: 'caution', icon: '🟡', title: '谨慎删除', hint: '系统或应用的缓存目录，建议确认后处理' },
-  { key: 'migrate', icon: '🟠', title: '可迁移', hint: '搬到其他盘并在原位置留目录联接，应用无感' },
-  { key: 'protected', icon: '🔴', title: '保护名单', hint: '绝不自动删除，面板里也不可勾选' },
+const TIERS: Array<{ key: TierKey; icon: string }> = [
+  { key: 'safe', icon: '🟢' },
+  { key: 'caution', icon: '🟡' },
+  { key: 'migrate', icon: '🟠' },
+  { key: 'protected', icon: '🔴' },
 ];
+
+/** 宿主动作码 → 字典键（对不上就原样显示动作码，方便发现新动作） */
+const ACTION_KEY: Record<string, string> = {
+  planned: 'action.planned',
+  trashed: 'action.trashed',
+  deleted: 'action.deleted',
+  partial: 'action.partial',
+  failed: 'action.failed',
+  refused: 'action.refused',
+  'needs-elevation': 'action.needsElevation',
+  'elevation-canceled': 'action.elevationCanceled',
+  migrated: 'action.migrated',
+  'rolled-back': 'action.rolledBack',
+  'destination-exists': 'action.destinationExists',
+  'insufficient-space': 'action.insufficientSpace',
+  'source-busy': 'action.sourceBusy',
+  'verify-failed': 'action.verifyFailed',
+};
+
+const STATUS_KEY: Record<string, string> = {
+  running: 'status.running',
+  done: 'status.done',
+  failed: 'status.failed',
+  canceled: 'status.canceled',
+};
 
 function formatBytes(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
@@ -50,88 +79,75 @@ function percent(part: number, total: number): string {
   return `${((part / total) * 100).toFixed(1)}%`;
 }
 
-const ACTION_LABEL: Record<string, string> = {
-  planned: '计划执行',
-  trashed: '已入暂存区',
-  deleted: '已删除',
-  partial: '部分完成',
-  failed: '失败',
-  refused: '已拒绝',
-  'needs-elevation': '等待提权',
-  'elevation-canceled': '提权被取消',
-  migrated: '已迁移',
-  'rolled-back': '已回滚',
-  'destination-exists': '目标已存在',
-  'insufficient-space': '目标盘空间不足',
-  'source-busy': '源被占用',
-  'verify-failed': '校验失败',
-};
-
-function TrendLine({ trend }: { trend: TrendView }): JSX.Element {
-  const delta = trend.freeDeltaBytes;
-  const sign = delta >= 0 ? '+' : '−';
+function TrendLine({ trend, t }: { trend: TrendView; t: Translate }): JSX.Element {
+  const sign = trend.freeDeltaBytes >= 0 ? '+' : '−';
   return (
     <div className="wcc_trend">
-      📈 与上次扫描（{trend.hoursAgo.toFixed(1)} 小时前）：剩余空间 {sign}
-      {formatBytes(Math.abs(delta))}｜长回来 {trend.grown.length} 项｜被释放 {trend.shrunk.length} 项
-      {trend.grown.length > 0 ? (
+      {t('trend.line', {
+        hours: trend.hoursAgo.toFixed(1),
+        sign,
+        delta: formatBytes(Math.abs(trend.freeDeltaBytes)),
+        grown: trend.grown.length,
+        shrunk: trend.shrunk.length,
+      })}
+      {trend.grown.length === 0 ? null : (
         <div className="wcc_trend_grown">
           {trend.grown.slice(0, 3).map((item) => (
             <div key={item.path} className="wcc_trend_row">
-              ＋{formatBytes(item.deltaBytes)}　{shortPath(item.path, 60)}
+              {t('trend.grownRow', { delta: formatBytes(item.deltaBytes), path: shortPath(item.path, 60) })}
             </div>
           ))}
         </div>
-      ) : null}
+      )}
     </div>
   );
 }
 
 function TierCard(props: {
   icon: string;
-  title: string;
-  hint: string;
-  group: PanelGroup;
   tier: TierKey;
+  group: PanelGroup;
   selected: Set<string>;
+  t: Translate;
   onToggle: (path: string) => void;
   onSelectTier: (tier: TierKey, select: boolean) => void;
   onMigrate: (path: string) => void;
 }): JSX.Element {
-  const [open, setOpen] = useState(props.tier === 'safe');
-  const selectable = props.tier === 'safe' || props.tier === 'caution';
-  const chosen = props.group.items.filter((item) => props.selected.has(item.path)).length;
+  const { t, group, tier } = props;
+  const [open, setOpen] = useState(tier === 'safe');
+  const selectable = tier === 'safe' || tier === 'caution';
+  const chosen = group.items.filter((item) => props.selected.has(item.path)).length;
 
   return (
-    <div className={`wcc_card wcc_card_${props.tier}`}>
+    <div className={`wcc_card wcc_card_${tier}`}>
       <div className="wcc_card_head">
         <span className="wcc_card_title">
-          {props.icon} {props.title}
+          {props.icon} {t(`tier.${tier}.title`)}
         </span>
         <span className="wcc_card_meta">
-          {props.group.count} 项 ｜ {formatBytes(props.group.bytes)}
-          {selectable && chosen > 0 ? ` ｜ 已选 ${chosen}` : ''}
+          {t('card.count', { count: group.count, size: formatBytes(group.bytes) })}
+          {selectable && chosen > 0 ? t('card.chosen', { count: chosen }) : ''}
         </span>
       </div>
-      <div className="wcc_card_hint">{props.hint}</div>
+      <div className="wcc_card_hint">{t(`tier.${tier}.hint`)}</div>
       <div className="wcc_card_actions">
         <button type="button" className="wcc_btn_tiny" onClick={() => setOpen((value) => !value)}>
-          {open ? '收起' : '展开'}
+          {open ? t('card.collapse') : t('card.expand')}
         </button>
         {selectable ? (
           <button
             type="button"
             className="wcc_btn_tiny"
-            onClick={() => props.onSelectTier(props.tier, chosen < props.group.items.length)}
+            onClick={() => props.onSelectTier(tier, chosen < group.items.length)}
           >
-            {chosen < props.group.items.length ? '全选本层' : '取消本层'}
+            {chosen < group.items.length ? t('card.selectTier') : t('card.clearTier')}
           </button>
         ) : null}
       </div>
       {open ? (
         <div className="wcc_list">
-          {props.group.items.length === 0 ? <div className="wcc_empty">（本层为空）</div> : null}
-          {props.group.items.map((item: PanelGroupItem) => (
+          {group.items.length === 0 ? <div className="wcc_empty">{t('card.empty')}</div> : null}
+          {group.items.map((item: PanelGroupItem) => (
             <div key={item.path} className="wcc_row">
               <input
                 type="checkbox"
@@ -139,7 +155,7 @@ function TierCard(props: {
                 disabled={!selectable}
                 checked={props.selected.has(item.path)}
                 onChange={() => props.onToggle(item.path)}
-                title={selectable ? '勾选后参与预演/执行' : '保护名单：不可勾选'}
+                title={selectable ? t('card.checkHint') : t('card.protectedHint')}
               />
               <div className="wcc_row_main">
                 <div className="wcc_row_path" title={item.path}>
@@ -151,12 +167,12 @@ function TierCard(props: {
               </div>
               {item.migratable ? (
                 <button type="button" className="wcc_btn_tiny" onClick={() => props.onMigrate(item.path)}>
-                  迁移预览
+                  {t('card.migratePreview')}
                 </button>
               ) : null}
             </div>
           ))}
-          {props.group.truncated ? <div className="wcc_empty">（列表过长，仅显示前 200 项）</div> : null}
+          {group.truncated ? <div className="wcc_empty">{t('card.truncated', { max: 200 })}</div> : null}
         </div>
       ) : null}
     </div>
@@ -165,9 +181,12 @@ function TierCard(props: {
 
 export interface PanelProps {
   api: PanelApi;
+  /** 平台注入的翻译 seat（插槽注册声明了 `locale:` 才有）；缺失时按浏览器语言自己选字典 */
+  t?: Translate;
 }
 
-export function CleanupPanel({ api }: PanelProps): JSX.Element {
+export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
+  const t = useMemo<Translate>(() => seat ?? makeTranslate(detectLocale()), [seat]);
   const [state, setState] = useState<PanelStateView | undefined>(undefined);
   const [scan, setScan] = useState<ScanView | undefined>(undefined);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -181,6 +200,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
   const [confirmPermanent, setConfirmPermanent] = useState(false);
+  const [helpOpen, setHelpOpen] = useState(false);
   const pollRef = useRef<number | undefined>(undefined);
 
   const refreshState = useCallback(async () => {
@@ -211,7 +231,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
         .then((snapshot) => {
           if (snapshot.job !== undefined) setJob(snapshot.job);
           if (snapshot.found === false) {
-            setError('任务已随宿主重启消失');
+            setError(t('error.jobGone'));
             setJob(undefined);
           }
         })
@@ -223,7 +243,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
         pollRef.current = undefined;
       }
     };
-  }, [api, job]);
+  }, [api, job, t]);
 
   const selectionKey = useMemo(() => [...selected].sort().join('\n'), [selected]);
 
@@ -256,7 +276,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
   );
 
   const runScan = useCallback(async () => {
-    setBusy('正在扫描 C 盘（热点清单，约 1 分钟）…');
+    setBusy(t('busy.scan'));
     setError('');
     setNotice('');
     try {
@@ -265,39 +285,46 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
       setSelected(new Set());
       setPreview(undefined);
       setMigration(undefined);
-      setNotice(`扫描完成：可释放潜力 🟢 ${formatBytes(result.groups.safe.bytes)} ｜ 🟡 ${formatBytes(result.groups.caution.bytes)} ｜ 🟠 ${formatBytes(result.groups.migrate.bytes)}`);
+      setNotice(
+        t('notice.scanDone', {
+          safe: formatBytes(result.groups.safe.bytes),
+          caution: formatBytes(result.groups.caution.bytes),
+          migrate: formatBytes(result.groups.migrate.bytes),
+        }),
+      );
       await refreshState();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy('');
     }
-  }, [api, refreshState, scope]);
+  }, [api, refreshState, scope, t]);
 
   const runPreview = useCallback(async () => {
     if (selected.size === 0) {
-      setError('请先勾选要处理的项');
+      setError(t('error.pickFirst'));
       return;
     }
-    setBusy('正在预演（不删除任何文件）…');
+    setBusy(t('busy.preview'));
     setError('');
     try {
       const result = await api.preview([...selected], mode);
       setPreview(result);
       setPreviewKey(selectionKey);
       setNotice(
-        `预演完成：计划处理 ${formatBytes(result.plannedBytes)}${result.elevationCount > 0 ? `，其中 ${result.elevationCount} 项需要管理员权限` : ''}`,
+        t('notice.previewDone', { size: formatBytes(result.plannedBytes) }) +
+          (result.elevationCount > 0 ? t('notice.previewElevation', { count: result.elevationCount }) : ''),
       );
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     } finally {
       setBusy('');
     }
-  }, [api, mode, selected, selectionKey]);
+  }, [api, mode, selected, selectionKey, t]);
 
   const startExecute = useCallback(
     async (dryRun: boolean) => {
-      setBusy(dryRun ? '正在执行（dryRun 预演）…' : '正在执行，请勿关闭页面…');
+      setBusy(dryRun ? t('busy.executeDry') : t('busy.execute'));
       setError('');
       try {
         const started = await api.execute([...selected], mode, dryRun);
@@ -310,30 +337,36 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
         setBusy('');
       }
     },
-    [api, mode, selected],
+    [api, mode, selected, t],
   );
 
   const runMigratePreview = useCallback(
     async (paths: string[]) => {
-      setBusy('正在计算迁移方案（不复制数据）…');
+      setBusy(t('busy.migratePreview'));
       setError('');
       try {
         const result = await api.migratePreview(paths, state?.migrationTarget?.letter);
         setMigration(result);
-        setNotice(`迁移预览：${result.items.length} 项，共 ${formatBytes(result.totalBytes)} → ${result.targetRoot}`);
+        setNotice(
+          t('notice.migratePreviewDone', {
+            count: result.items.length,
+            size: formatBytes(result.totalBytes),
+            root: result.targetRoot,
+          }),
+        );
       } catch (cause) {
         setError(cause instanceof Error ? cause.message : String(cause));
       } finally {
         setBusy('');
       }
     },
-    [api, state],
+    [api, state, t],
   );
 
   const startMigrate = useCallback(
     async (dryRun: boolean) => {
       if (migration === undefined) return;
-      setBusy(dryRun ? '正在预演迁移…' : '正在迁移（先复制、校验，再删源、建联接）…');
+      setBusy(dryRun ? t('busy.migrateDry') : t('busy.migrate'));
       setError('');
       try {
         const started = await api.migrate(
@@ -349,18 +382,33 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
         setBusy('');
       }
     },
-    [api, migration, state],
+    [api, migration, state, t],
   );
 
   const cancelJob = useCallback(async () => {
     if (job === undefined) return;
     try {
       const result = await api.cancel(job.jobId);
-      setNotice(result.canceled ? '已请求取消，正在安全中止…' : (result.reason ?? '取消失败'));
+      setNotice(result.canceled ? t('notice.cancelRequested') : (result.reason ?? t('notice.cancelFailed')));
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [api, job]);
+  }, [api, job, t]);
+
+  const actionLabel = useCallback(
+    (action: string): string => {
+      const key = ACTION_KEY[action];
+      return key === undefined ? t('action.unknown', { action }) : t(key);
+    },
+    [t],
+  );
+
+  const schedulerChip = (): string => {
+    const scheduler = state?.scheduler;
+    if (scheduler === undefined || !scheduler.enabled) return t('chip.scheduler.off');
+    if (scheduler.running) return t('chip.scheduler.running');
+    return t('chip.scheduler.on', { hours: scheduler.intervalHours, percent: scheduler.alertFreePercent });
+  };
 
   const needPreview = preview === undefined || previewKey !== selectionKey;
   const system = state?.drives.find((drive) => drive.isSystem);
@@ -370,67 +418,114 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
     <div className="wcc_panel">
       <header className="wcc_head">
         <div>
-          <div className="wcc_title">🧹 C 盘清理</div>
+          <div className="wcc_title">{t('title')}</div>
           <div className="wcc_sub">
             {system === undefined
-              ? '正在读取磁盘信息…'
-              : `${system.letter}: 剩余 ${formatBytes(system.freeBytes)} / 共 ${formatBytes(system.totalBytes)}（已用 ${percent(usedBytes, system.totalBytes)}）`}
+              ? t('sub.reading')
+              : t('sub.drive', {
+                  letter: system.letter,
+                  free: formatBytes(system.freeBytes),
+                  total: formatBytes(system.totalBytes),
+                  used: percent(usedBytes, system.totalBytes),
+                })}
           </div>
         </div>
         <div className="wcc_head_right">
           {state?.migrationTarget === undefined ? null : (
-            <span className="wcc_chip">迁移目标 {state.migrationTarget.root}（{formatBytes(state.migrationTarget.freeBytes)} 可用）</span>
+            <span className="wcc_chip">
+              {t('chip.migrationTarget', {
+                root: state.migrationTarget.root,
+                free: formatBytes(state.migrationTarget.freeBytes),
+              })}
+            </span>
           )}
-          <span className="wcc_chip">{state?.scheduler.description ?? '定时扫描：读取中…'}</span>
+          <span className="wcc_chip">{schedulerChip()}</span>
         </div>
       </header>
 
-      {state?.trend === undefined ? null : <TrendLine trend={state.trend} />}
+      {state?.trend === undefined ? null : <TrendLine trend={state.trend} t={t} />}
 
+      {/* 三组相邻按钮：①范围+扫描 ②已选+清空 ③删除方式+预演+说明+确认执行 */}
       <div className="wcc_toolbar">
-        <label className="wcc_field">
-          范围
-          <select value={scope} onChange={(event) => setScope(event.target.value as 'hotspots' | 'full')}>
-            <option value="hotspots">热点清单（快）</option>
-            <option value="full">热点 + 全盘 Top-N（慢）</option>
-          </select>
-        </label>
-        <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void runScan()}>
-          {scan === undefined ? '扫描 C 盘' : '重新扫描'}
-        </button>
-        <label className="wcc_field">
-          删除方式
-          <select
-            value={mode}
-            onChange={(event) => {
-              const next = event.target.value as 'trash' | 'permanent';
-              setMode(next);
-              setConfirmPermanent(false);
+        <div className="wcc_group">
+          <label className="wcc_field">
+            {t('scope.label')}
+            <select value={scope} onChange={(event) => setScope(event.target.value as 'hotspots' | 'full')}>
+              <option value="hotspots">{t('scope.hotspots')}</option>
+              <option value="full">{t('scope.full')}</option>
+            </select>
+          </label>
+          <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void runScan()}>
+            {scan === undefined ? t('action.scan') : t('action.rescan')}
+          </button>
+        </div>
+
+        <div className="wcc_group">
+          <span className="wcc_selected">{t('selected', { count: selected.size })}</span>
+          <button
+            type="button"
+            className="wcc_btn"
+            disabled={selected.size === 0}
+            onClick={() => {
+              setSelected(new Set());
               setPreview(undefined);
             }}
           >
-            <option value="trash">移到暂存区（可恢复）</option>
-            <option value="permanent">永久删除（不可恢复）</option>
-          </select>
-        </label>
-        <span className="wcc_spacer" />
-        <span className="wcc_selected">已选 {selected.size} 项</span>
-        <button type="button" className="wcc_btn" disabled={selected.size === 0 || busy !== ''} onClick={() => void runPreview()}>
-          预演
-        </button>
-        <button
-          type="button"
-          className="wcc_btn wcc_btn_primary"
-          disabled={needPreview || selected.size === 0 || busy !== ''}
-          title={needPreview ? '勾选或模式已变化，请先重新预演' : '按预演过的动作执行'}
-          onClick={() => void startExecute(false)}
-        >
-          确认执行
-        </button>
-        <button type="button" className="wcc_btn" disabled={selected.size === 0} onClick={() => { setSelected(new Set()); setPreview(undefined); }}>
-          清空选择
-        </button>
+            {t('action.clear')}
+          </button>
+        </div>
+
+        <div className="wcc_group">
+          <label className="wcc_field">
+            {t('mode.label')}
+            <select
+              value={mode}
+              onChange={(event) => {
+                const next = event.target.value as 'trash' | 'permanent';
+                setMode(next);
+                setConfirmPermanent(false);
+                setPreview(undefined);
+              }}
+            >
+              <option value="trash">{t('mode.trash')}</option>
+              <option value="permanent">{t('mode.permanent')}</option>
+            </select>
+          </label>
+          <button type="button" className="wcc_btn" disabled={selected.size === 0 || busy !== ''} onClick={() => void runPreview()}>
+            {t('action.preview')}
+          </button>
+          <button
+            type="button"
+            className={`wcc_help${helpOpen ? ' wcc_help_on' : ''}`}
+            aria-expanded={helpOpen}
+            aria-label={t('help.preview.toggle')}
+            title={t('help.preview.title')}
+            onClick={() => setHelpOpen((value) => !value)}
+          >
+            ?
+          </button>
+          <button
+            type="button"
+            className="wcc_btn wcc_btn_primary"
+            disabled={needPreview || selected.size === 0 || busy !== ''}
+            title={needPreview ? t('confirm.hintStale') : t('confirm.hintReady')}
+            onClick={() => void startExecute(false)}
+          >
+            {t('action.confirm')}
+          </button>
+        </div>
       </div>
+
+      {helpOpen ? (
+        <div className="wcc_helpbox">
+          <div className="wcc_helpbox_title">{t('help.preview.title')}</div>
+          <div className="wcc_helpbox_body">{t('help.preview.body')}</div>
+          <div className="wcc_helpbox_body wcc_helpbox_limits">{t('help.preview.limits')}</div>
+          <button type="button" className="wcc_btn_tiny" onClick={() => setHelpOpen(false)}>
+            {t('job.collapse')}
+          </button>
+        </div>
+      ) : null}
 
       {busy !== '' ? <div className="wcc_status">⏳ {busy}</div> : null}
       {notice !== '' ? <div className="wcc_notice">{notice}</div> : null}
@@ -438,11 +533,15 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
 
       {scan === undefined ? (
         <div className="wcc_empty_panel">
-          还没有扫描结果。点「扫描 C 盘」开始 —— 扫描只读，不会删除任何文件。
+          {t('empty.noScan')}
           {state?.lastScan === undefined ? null : (
             <div className="wcc_last">
-              上次扫描：{state.lastScan.at}（{state.lastScan.itemCount} 项，可释放 🟢 {formatBytes(state.lastScan.safeBytes)} / 🟡{' '}
-              {formatBytes(state.lastScan.cautionBytes)}）
+              {t('empty.lastScan', {
+                at: state.lastScan.at,
+                count: state.lastScan.itemCount,
+                safe: formatBytes(state.lastScan.safeBytes),
+                caution: formatBytes(state.lastScan.cautionBytes),
+              })}
             </div>
           )}
         </div>
@@ -450,7 +549,8 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
         <>
           {scan.partial ? (
             <div className="wcc_warn">
-              ⚠️ 扫描被时间预算截断，列表可能不完整{scan.partialReasons.length > 0 ? `：${scan.partialReasons.join('；')}` : ''}
+              {t('warn.partial')}
+              {scan.partialReasons.length > 0 ? t('warn.partialReasons', { reasons: scan.partialReasons.join('；') }) : ''}
             </div>
           ) : null}
           <div className="wcc_cards">
@@ -459,10 +559,9 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
                 key={tier.key}
                 tier={tier.key}
                 icon={tier.icon}
-                title={tier.title}
-                hint={tier.hint}
                 group={scan.groups[tier.key]}
                 selected={selected}
+                t={t}
                 onToggle={toggle}
                 onSelectTier={selectTier}
                 onMigrate={(path) => void runMigratePreview([path])}
@@ -472,7 +571,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
 
           {scan.longTerm.length === 0 ? null : (
             <details className="wcc_longterm">
-              <summary>🔵 长期防护措施（{scan.longTerm.length} 项，改配置/改习惯比反复清理更省事）</summary>
+              <summary>{t('longterm.summary', { count: scan.longTerm.length })}</summary>
               {scan.longTerm.map((action) => (
                 <div key={action.id} className="wcc_row_main">
                   <div className="wcc_row_path">{action.title}</div>
@@ -487,25 +586,31 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
       {preview === undefined ? null : (
         <section className="wcc_section">
           <div className="wcc_section_title">
-            🔍 预演结果 —— 计划处理 {formatBytes(preview.plannedBytes)}（{preview.items.length} 项）
-            {preview.trashPath === undefined ? '' : `，暂存区 ${preview.trashPath}`}
+            {t('preview.title', { size: formatBytes(preview.plannedBytes), count: preview.items.length })}
+            {preview.trashPath === undefined ? '' : t('preview.trashPath', { path: preview.trashPath })}
           </div>
           {preview.warnings.map((warning) => (
-            <div key={warning} className="wcc_warn">⚠️ {warning}</div>
+            <div key={warning} className="wcc_warn">
+              ⚠️ {warning}
+            </div>
           ))}
           {preview.items.slice(0, 30).map((item) => (
             <div key={item.path} className="wcc_row">
-              <span className={`wcc_tag wcc_tag_${item.kind}`}>{ACTION_LABEL[item.action] ?? item.action}</span>
+              <span className={`wcc_tag wcc_tag_${item.kind}`}>{actionLabel(item.action)}</span>
               <div className="wcc_row_main">
-                <div className="wcc_row_path" title={item.path}>{shortPath(item.path)}</div>
-                <div className="wcc_row_reason">{formatBytes(item.sizeBytes)} ｜ {item.reason}</div>
+                <div className="wcc_row_path" title={item.path}>
+                  {shortPath(item.path)}
+                </div>
+                <div className="wcc_row_reason">
+                  {formatBytes(item.sizeBytes)} ｜ {item.reason}
+                </div>
               </div>
             </div>
           ))}
-          {preview.items.length > 30 ? <div className="wcc_empty">（仅显示前 30 项，完整清单见执行报告）</div> : null}
+          {preview.items.length > 30 ? <div className="wcc_empty">{t('preview.more', { shown: 30 })}</div> : null}
           {preview.refused.length === 0 ? null : (
             <div className="wcc_refused">
-              已拒绝 {preview.refused.length} 项（保护名单/越界/不存在，宿主的硬约束，面板无法绕过）：
+              {t('preview.refused', { count: preview.refused.length })}
               {preview.refused.slice(0, 8).map((item) => (
                 <div key={item.path} className="wcc_row_reason">
                   🚫 {shortPath(item.path, 56)} ｜ {item.reason}
@@ -515,10 +620,10 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
           )}
           {mode === 'permanent' ? (
             <div className="wcc_danger">
-              永久删除不可恢复。若确认，请先勾选下面的确认框，再点「确认执行」。
+              {t('preview.permanentWarn')}
               <label className="wcc_field">
                 <input type="checkbox" checked={confirmPermanent} onChange={(event) => setConfirmPermanent(event.target.checked)} />
-                我已确认这些内容不再需要
+                {t('preview.permanentConfirm')}
               </label>
             </div>
           ) : null}
@@ -529,10 +634,10 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
               disabled={busy !== '' || (mode === 'permanent' && !confirmPermanent)}
               onClick={() => void startExecute(false)}
             >
-              确认执行（{formatBytes(preview.plannedBytes)}）
+              {t('action.confirmBytes', { size: formatBytes(preview.plannedBytes) })}
             </button>
             <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void startExecute(true)}>
-              再跑一次 dryRun
+              {t('preview.dryAgain')}
             </button>
           </div>
         </section>
@@ -540,37 +645,41 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
 
       {migration === undefined ? null : (
         <section className="wcc_section">
-          <div className="wcc_section_title">🚚 迁移预览 → {migration.targetRoot}（目标盘可用 {formatBytes(migration.targetFreeBytes)}）</div>
+          <div className="wcc_section_title">
+            {t('migration.title', { root: migration.targetRoot, free: formatBytes(migration.targetFreeBytes) })}
+          </div>
           {migration.warnings.map((warning) => (
-            <div key={warning} className="wcc_warn">⚠️ {warning}</div>
+            <div key={warning} className="wcc_warn">
+              ⚠️ {warning}
+            </div>
           ))}
           {migration.items.map((item) => (
             <div key={item.source} className="wcc_row">
               <span className={`wcc_tag ${item.hasRoom ? 'wcc_tag_trash' : 'wcc_tag_delete'}`}>
-                {item.unknown ? '空间未知' : item.hasRoom ? '空间够' : '空间不足'}
+                {item.unknown ? t('migration.spaceUnknown') : item.hasRoom ? t('migration.spaceOk') : t('migration.spaceLow')}
               </span>
               <div className="wcc_row_main">
                 <div className="wcc_row_path" title={`${item.source} → ${item.destination}`}>
                   {shortPath(item.source, 48)} → {shortPath(item.destination, 48)}
                 </div>
                 <div className="wcc_row_reason">
-                  {formatBytes(item.sizeBytes)} ｜ {item.fileCount} 个文件 ｜ 源删净后原位置留目录联接
+                  {t('migration.row', { size: formatBytes(item.sizeBytes), count: item.fileCount })}
                 </div>
               </div>
             </div>
           ))}
           {migration.needsConfigChange.length === 0 ? null : (
-            <div className="wcc_notice">迁移后需要你自己改的配置（插件不代改）：{migration.needsConfigChange.join('；')}</div>
+            <div className="wcc_notice">{t('migration.configChange', { list: migration.needsConfigChange.join('；') })}</div>
           )}
           <div className="wcc_toolbar">
             <button type="button" className="wcc_btn wcc_btn_primary" disabled={busy !== ''} onClick={() => void startMigrate(false)}>
-              确认迁移（{formatBytes(migration.totalBytes)}）
+              {t('migration.confirm', { size: formatBytes(migration.totalBytes) })}
             </button>
             <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void startMigrate(true)}>
-              只看 dryRun
+              {t('migration.dry')}
             </button>
             <button type="button" className="wcc_btn" onClick={() => setMigration(undefined)}>
-              关闭
+              {t('migration.close')}
             </button>
           </div>
         </section>
@@ -579,34 +688,47 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
       {job === undefined ? null : (
         <section className="wcc_section">
           <div className="wcc_section_title">
-            {job.dryRun ? '🧪 dryRun 任务' : '⚙️ 执行任务'} {job.jobId} ｜ {ACTION_LABEL[job.status] ?? job.status}
-            {job.reportPath === undefined ? '' : ` ｜ 报告：${job.reportPath}`}
+            {job.dryRun ? t('job.titleDry') : t('job.titleReal')} {job.jobId} ｜{' '}
+            {STATUS_KEY[job.status] === undefined ? job.status : t(STATUS_KEY[job.status] as string)}
+            {job.reportPath === undefined ? '' : t('job.report', { path: job.reportPath })}
           </div>
           <div className="wcc_bar">
-            <div className="wcc_bar_fill" style={{ width: job.total === 0 ? '0%' : `${Math.min(100, (job.done / job.total) * 100)}%` }} />
+            <div
+              className="wcc_bar_fill"
+              style={{ width: job.total === 0 ? '0%' : `${Math.min(100, (job.done / job.total) * 100)}%` }}
+            />
           </div>
           <div className="wcc_row_reason">
-            {job.done}/{job.total} 项 ｜ {job.message ?? '…'}
-            {job.status === 'running' ? '' : ` ｜ 逐项合计 ${formatBytes(job.measuredFreedBytes)}${job.freedBytes > 0 ? ` ｜ 盘符净增 ${formatBytes(job.freedBytes)}` : ''}`}
+            {t('job.progress', { done: job.done, total: job.total, message: job.message ?? '…' })}
+            {job.status === 'running'
+              ? ''
+              : t('job.totalsMeasured', { measured: formatBytes(job.measuredFreedBytes) }) +
+                (job.freedBytes > 0 ? t('job.totalsDrive', { freed: formatBytes(job.freedBytes) }) : '')}
           </div>
           {job.error === undefined ? null : <div className="wcc_error">⚠️ {job.error}</div>}
           {job.items.slice(0, 40).map((item) => (
             <div key={`${item.path}-${item.action}`} className="wcc_row">
-              <span className={`wcc_tag wcc_tag_${item.action === 'refused' ? 'refused' : 'trash'}`}>{ACTION_LABEL[item.action] ?? item.action}</span>
+              <span className={`wcc_tag wcc_tag_${item.action === 'refused' ? 'refused' : 'trash'}`}>
+                {actionLabel(item.action)}
+              </span>
               <div className="wcc_row_main">
-                <div className="wcc_row_path" title={item.path}>{shortPath(item.path)}</div>
-                <div className="wcc_row_reason">{formatBytes(item.sizeBytes)} ｜ {item.reason}</div>
+                <div className="wcc_row_path" title={item.path}>
+                  {shortPath(item.path)}
+                </div>
+                <div className="wcc_row_reason">
+                  {formatBytes(item.sizeBytes)} ｜ {item.reason}
+                </div>
               </div>
             </div>
           ))}
           <div className="wcc_toolbar">
             {job.status === 'running' ? (
               <button type="button" className="wcc_btn" onClick={() => void cancelJob()}>
-                取消任务
+                {t('job.cancel')}
               </button>
             ) : (
               <button type="button" className="wcc_btn" onClick={() => setJob(undefined)}>
-                收起
+                {t('job.collapse')}
               </button>
             )}
           </div>
@@ -614,7 +736,7 @@ export function CleanupPanel({ api }: PanelProps): JSX.Element {
       )}
 
       <footer className="wcc_footer">
-        历史：{state?.historyPath ?? '…'}｜报告：{state?.reportDir ?? '…'}（任务表在宿主内存里，宿主重启即清空）
+        {t('footer.paths', { history: state?.historyPath ?? '…', report: state?.reportDir ?? '…' })}
       </footer>
     </div>
   );

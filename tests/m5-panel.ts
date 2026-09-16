@@ -12,6 +12,13 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { type Config } from '../src/config.js';
 import { defaultHistoryPath } from '../src/history/index.js';
+import {
+  englishRuleCoverage,
+  englishRules,
+  longTermText,
+  normalizeLocale,
+  ruleReason,
+} from '../src/i18n/index.js';
 import { PANEL_CHANNEL, panelEndpoints, registerPanelRpc } from '../src/panel/rpc.js';
 import {
   disposePanelJobs,
@@ -28,6 +35,9 @@ import {
   panelStartMigration,
   panelState,
 } from '../src/panel/service.js';
+import { guardTargets } from '../src/executor/safety.js';
+import { loadDefaultRules } from '../src/rules/load.js';
+import { buildRuleIndex } from '../src/rules/match.js';
 
 const MB = 1024 * 1024;
 const sandbox = path.join(os.tmpdir(), 'dsh-cc-m5-sandbox');
@@ -49,6 +59,11 @@ async function exists(target: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/** 是否含中文字符（用来断言英文文案里没有残留中文，或反之） */
+function hasHan(text: string): boolean {
+  return /\p{Script=Han}/u.test(text);
 }
 
 async function makeJunk(dir: string, files = 3, sizeMB = 2): Promise<number> {
@@ -128,7 +143,11 @@ async function main(): Promise<void> {
   console.log('--- 1. 面板状态 ---');
   const state = await panelState(config);
   check('1.1 状态里有系统盘与全部盘符', state.systemDrive === 'C' && state.drives.length >= 2, JSON.stringify(state.drives.map((d) => d.letter)));
-  check('1.2 定时扫描如实显示未启用', state.scheduler.enabled === false && state.scheduler.description.includes('未启用'), state.scheduler.description);
+  check(
+    '1.2 定时扫描如实返回结构化状态（面板自己组织双语文案，宿主不吐中文句子）',
+    state.scheduler.enabled === false && state.scheduler.running === false && state.scheduler.intervalHours === 24,
+    JSON.stringify(state.scheduler),
+  );
   check('1.3 报告目录与历史路径来自配置', state.reportDir === path.join(sandbox, 'reports') && state.historyPath === path.join(sandbox, 'history.jsonl'));
   check('1.4 迁移目标盘是非系统盘且给出根路径', state.migrationTarget?.root === 'D:\\', JSON.stringify(state.migrationTarget));
   checkLossless('1.5 状态视图是 lossless JSON', state);
@@ -371,6 +390,107 @@ async function main(): Promise<void> {
   }
   console.warn = originalWarn;
   check('9.12 宿主没有 connection 服务时静默降级（工具面不受影响）', cliThrew === false && warnings.some((line) => line.includes('connection')), warnings.join(' | '));
+
+  // ---------- 10. 宿主侧中英双语 ----------
+  console.log('\n--- 10. 宿主侧文案双语 ---');
+  const rulesZh = await loadDefaultRules();
+  const coverage = englishRuleCoverage(
+    rulesZh.rules.map((rule) => rule.id),
+    rulesZh.longTermActions.map((action) => action.id),
+  );
+  check(
+    '10.1 英文文案文件可用，且 101 条规则 + 6 条长期防护全覆盖（id 严格对齐）',
+    coverage.available && coverage.rules.missing.length === 0 && coverage.longTerm.missing.length === 0,
+    `规则 ${coverage.rules.total - coverage.rules.missing.length}/${coverage.rules.total}｜长期 ${coverage.longTerm.total - coverage.longTerm.missing.length}/${coverage.longTerm.total}`,
+  );
+  check(
+    '10.2 英文文案里没有中文字符（不允许「半翻译」混进界面）',
+    !hasHan(JSON.stringify(englishRules() ?? {})),
+  );
+  const sampleRule = rulesZh.rules.find((rule) => rule.id === 'temp-user');
+  check(
+    '10.3 规则说明按语言取（同一 id 两种语言不同、都不是空）',
+    sampleRule !== undefined &&
+      ruleReason('temp-user', sampleRule.reason, 'en') !== sampleRule.reason &&
+      ruleReason('temp-user', sampleRule.reason, 'zh') === sampleRule.reason &&
+      !hasHan(ruleReason('temp-user', sampleRule.reason, 'en')),
+    `${ruleReason('temp-user', sampleRule?.reason ?? '', 'zh')} ｜ ${ruleReason('temp-user', sampleRule?.reason ?? '', 'en')}`,
+  );
+  check(
+    '10.4 默认语言是中文（模型工具那条路行为不变）',
+    ruleReason('temp-user', sampleRule?.reason ?? '', normalizeLocale(undefined)) === sampleRule?.reason,
+  );
+  check(
+    '10.5 英文缺失的规则 id 回退中文原文，不显示空洞',
+    ruleReason('不存在的规则 id', '中文原文', 'en') === '中文原文',
+  );
+  check(
+    '10.6 长期防护措施按语言取（title/detail/detect/benefit 四项齐全）',
+    (() => {
+      const action = rulesZh.longTermActions[0];
+      if (action === undefined) return false;
+      const en = longTermText(action, 'en');
+      return en.title.length > 0 && en.detail.length > 0 && en.benefit.length > 0 && !hasHan(JSON.stringify(en));
+    })(),
+  );
+
+  // 安全闸：拒绝理由也要能说英文（这是面板上最容易出现的文案）
+  const guardEn = await guardTargets([protectedPath, junk], {
+    index: buildRuleIndex(rulesZh.rules),
+    systemDrive: 'C:',
+    allowExplicitUnmatched: false,
+    allowProtectedOverride: false,
+    locale: 'en',
+  });
+  const protectedRefusalEn = guardEn.refused.find((entry) => entry.path === protectedPath);
+  check(
+    '10.7 安全闸拒绝理由支持英文（面板不会中英混杂）',
+    guardEn.refused.length >= 1 &&
+      protectedRefusalEn !== undefined &&
+      !hasHan(protectedRefusalEn.reason) &&
+      /Protected list/i.test(protectedRefusalEn.reason),
+    JSON.stringify(guardEn.refused),
+  );
+  const guardZh = await guardTargets([protectedPath], {
+    index: buildRuleIndex(rulesZh.rules),
+    systemDrive: 'C:',
+    allowExplicitUnmatched: false,
+    allowProtectedOverride: false,
+  });
+  check(
+    '10.8 不传语言时安全闸仍是中文（默认路径零变化）',
+    guardZh.refused[0] !== undefined && hasHan(guardZh.refused[0].reason),
+    JSON.stringify(guardZh.refused[0]),
+  );
+
+  // 端到端：RPC 端点带 locale → 服务层返回对应语言
+  const missingPath = path.join(sandbox, 'never-existed-目录');
+  const enPreview = (await endpoints.preview({ paths: [missingPath], locale: 'en' })) as {
+    refused: Array<{ reason: string }>;
+  };
+  check(
+    '10.9 预演端点透传 locale（拒绝理由整句英文，端到端打通）',
+    enPreview.refused.length === 1 && !hasHan(enPreview.refused[0]?.reason ?? '') && /does not exist/i.test(enPreview.refused[0]?.reason ?? ''),
+    JSON.stringify(enPreview.refused),
+  );
+
+  // 扫描结果里的每条规则说明都要能翻成英文（面板逐项渲染的就是它）
+  const scannedRuleIds = [
+    ...new Set(
+      (['safe', 'caution', 'migrate', 'protected'] as const).flatMap((key) =>
+        scan.groups[key].items.map((item) => item.ruleId),
+      ),
+    ),
+  ];
+  const untranslated = scannedRuleIds.filter((id) => {
+    const rule = rulesZh.rules.find((entry) => entry.id === id);
+    return rule === undefined || hasHan(ruleReason(id, rule.reason, 'en'));
+  });
+  check(
+    '10.10 本次扫描到的规则说明全部有英文版本（面板切英文不残留中文）',
+    scannedRuleIds.length > 0 && untranslated.length === 0,
+    `扫描到 ${scannedRuleIds.length} 条规则｜未翻译：${untranslated.join(',') || '无'}`,
+  );
 
   // ---------- 8. 卸载清理 ----------
   console.log('\n--- 8. 卸载与清理 ---');

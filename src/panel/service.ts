@@ -26,6 +26,7 @@ import {
   readHistory,
   type Trend,
 } from '../history/index.js';
+import { longTermText, normalizeLocale, pick, ruleConfigHint, ruleReason, type LocaleId } from '../i18n/index.js';
 import {
   activeMigrations,
   driveOf,
@@ -38,7 +39,7 @@ import {
 } from '../migrator/index.js';
 import { buildPlan } from '../planner/index.js';
 import { renderExecutionReport } from '../report/execution.js';
-import { buildRuleIndex } from '../rules/match.js';
+import { buildRuleIndex, pickWinner } from '../rules/match.js';
 import { loadRules } from '../rules/load.js';
 import type { ClassifiedItem, Plan } from '../rules/schema.js';
 import { driveRoot } from '../util/drive.js';
@@ -104,7 +105,8 @@ export interface PanelState {
   defaultScope: 'hotspots' | 'full';
   historyPath: string;
   reportDir: string;
-  scheduler: { enabled: boolean; description: string };
+  /** 结构化调度状态：面板自己组织成双语文案，宿主不往界面吐中文句子 */
+  scheduler: { enabled: boolean; running: boolean; intervalHours: number; alertFreePercent: number };
   lastScan?: {
     planId: string;
     at: string;
@@ -150,9 +152,12 @@ export async function panelState(config: Config, scheduler?: SchedulerLike): Pro
     defaultScope: config.defaultScope,
     historyPath,
     reportDir: panelOutputDir(config),
+    // 结构化返回，面板自己组织成双语文案：宿主不再往界面吐中文句子
     scheduler: {
       enabled: config.schedule?.enabled === true,
-      description: scheduler?.isRunning() === true ? '定时扫描运行中' : describePanelSchedule(config),
+      running: scheduler?.isRunning() === true,
+      intervalHours: config.schedule?.intervalHours ?? 24,
+      alertFreePercent: config.schedule?.alertFreePercent ?? 10,
     },
     ...(lastScan === undefined ? {} : { lastScan: planSummaryView(lastScan, drives) }),
     ...(target === undefined
@@ -161,12 +166,6 @@ export async function panelState(config: Config, scheduler?: SchedulerLike): Pro
     runningJobs: [...jobs.values()].filter((j) => j.view.status === 'running').length,
     ...(trend === undefined ? {} : { trend }),
   };
-}
-
-function describePanelSchedule(config: Config): string {
-  const schedule = config.schedule;
-  if (schedule?.enabled !== true) return '未启用（config.schedule.enabled = false）';
-  return `每 ${schedule.intervalHours} 小时扫描一次（范围 ${schedule.scope}）`;
 }
 
 function planSummaryView(scan: NonNullable<typeof lastScan>, drives: Awaited<ReturnType<typeof listDrives>>) {
@@ -226,7 +225,7 @@ interface PanelGroup {
   }>;
 }
 
-function groupView(items: ClassifiedItem[]): PanelGroup {
+function groupView(items: ClassifiedItem[], locale: LocaleId = 'zh'): PanelGroup {
   return {
     count: items.length,
     bytes: sumBytes(items),
@@ -236,7 +235,7 @@ function groupView(items: ClassifiedItem[]): PanelGroup {
       ruleId: item.ruleId,
       sizeBytes: item.sizeBytes,
       grade: item.grade,
-      reason: item.reason,
+      reason: ruleReason(item.ruleId, item.reason, locale),
       migratable: item.migrate !== undefined && item.migrate !== null,
     })),
   };
@@ -245,10 +244,11 @@ function groupView(items: ClassifiedItem[]): PanelGroup {
 /** 扫描：与工具/定时扫描同一条流水线（loadRules → scanSystem → classify → buildPlan → 历史） */
 export async function panelScan(
   config: Config,
-  args: { scope?: 'hotspots' | 'full' } = {},
+  args: { scope?: 'hotspots' | 'full'; locale?: LocaleId } = {},
   hooks: { onProgress?: (message: string) => void; signal?: AbortSignal } = {},
 ): Promise<PanelScanResult> {
   const started = Date.now();
+  const locale = normalizeLocale(args.locale);
   const scope = args.scope ?? config.defaultScope;
   const { ruleSet, warnings } = await loadRules({
     extraRulesFile: config.extraRulesFile,
@@ -301,17 +301,14 @@ export async function panelScan(
     freeBytes: system?.freeBytes ?? 0,
     totalBytes: system?.totalBytes ?? 0,
     groups: {
-      safe: groupView(plan.groups.safe),
-      caution: groupView(plan.groups.caution),
-      migrate: groupView(plan.groups.migrate),
-      protected: groupView(plan.groups.protected),
+      safe: groupView(plan.groups.safe, locale),
+      caution: groupView(plan.groups.caution, locale),
+      migrate: groupView(plan.groups.migrate, locale),
+      protected: groupView(plan.groups.protected, locale),
     },
     longTerm: plan.longTerm.map((action) => ({
       id: action.id,
-      title: action.title,
-      detail: action.action,
-      detect: action.detect,
-      benefit: action.benefit,
+      ...longTermText(action, locale),
     })),
     bigItems: plan.bigItems.slice(0, 50).map((item) => ({
       path: item.path,
@@ -341,9 +338,17 @@ export interface PanelPreview {
  */
 export async function panelPreview(
   config: Config,
-  args: { paths?: string[]; grade?: 'safe' | 'caution'; mode?: 'trash' | 'permanent'; trashPath?: string; elevation?: string },
+  args: {
+    paths?: string[];
+    grade?: 'safe' | 'caution';
+    mode?: 'trash' | 'permanent';
+    trashPath?: string;
+    elevation?: string;
+    locale?: LocaleId;
+  },
 ): Promise<PanelPreview> {
   const targets = args.paths ?? targetsOfGrade(args.grade ?? 'safe');
+  const locale = normalizeLocale(args.locale);
   const { ruleSet } = await loadRules({
     extraRulesFile: config.extraRulesFile,
     allowProtectedOverride: config.allowProtectedOverride,
@@ -355,8 +360,12 @@ export async function panelPreview(
   const mode = args.mode ?? config.defaultDeleteMode;
   const trashPath = args.trashPath ?? config.trashPath ?? (target ? path.join(driveRoot(target.letter), 'to_delete') : undefined);
   const warnings: string[] = [];
-  if (mode === 'trash' && !trashPath) warnings.push('暂存区模式需要另一个盘：未检测到非系统盘，且未提供 trashPath');
-  if (mode === 'permanent') warnings.push('永久删除不可恢复：面板默认用暂存区模式');
+  if (mode === 'trash' && !trashPath) {
+    warnings.push(pick(locale, '暂存区模式需要另一个盘：未检测到非系统盘，且未提供 trashPath', 'Staging mode needs a second drive: no non-system drive was detected and no trashPath was given'));
+  }
+  if (mode === 'permanent') {
+    warnings.push(pick(locale, '永久删除不可恢复：面板默认用暂存区模式', 'Permanent deletion cannot be undone: the panel prefers the staging mode by default'));
+  }
 
   const report = await executeCleanup({
     targets,
@@ -368,6 +377,7 @@ export async function panelPreview(
     allowExplicitUnmatched: config.allowExplicitUnmatched,
     allowProtectedOverride: config.allowProtectedOverride,
     knownSizes: knownSizes(),
+    locale,
     elevation: {
       dism: args.elevation === 'dism' || args.elevation === 'dism+cleanmgr',
       cleanmgr: args.elevation === 'cleanmgr' || args.elevation === 'dism+cleanmgr',
@@ -406,9 +416,10 @@ export interface PanelMigratePreview {
 /** 迁移预览：源 → 目标映射 + 目标盘空间是否够（不复制任何数据） */
 export async function panelMigratePreview(
   config: Config,
-  args: { paths: string[]; targetDrive?: string },
+  args: { paths: string[]; targetDrive?: string; locale?: LocaleId },
   hooks: { signal?: AbortSignal } = {},
 ): Promise<PanelMigratePreview> {
+  const locale = normalizeLocale(args.locale);
   const drives = await listDrives();
   const requested = args.targetDrive?.replace(/:.*$/, '').toUpperCase();
   const target =
@@ -423,7 +434,13 @@ export async function panelMigratePreview(
       targetFreeBytes: 0,
       targetKnown: false,
       needsConfigChange: [],
-      warnings: ['未找到可用的非系统盘作为迁移目标（同盘迁移不会释放空间）'],
+      warnings: [
+        pick(
+          locale,
+          '未找到可用的非系统盘作为迁移目标（同盘迁移不会释放空间）',
+          'No usable non-system drive to migrate to (migrating within one drive frees nothing)',
+        ),
+      ],
     };
   }
 
@@ -446,8 +463,24 @@ export async function panelMigratePreview(
       hasRoom: room.ok,
       unknown: !room.known,
     });
-    if (!room.ok && room.known) warnings.push(`目标盘空间不足：${source}（需要 ${formatBytes(measured.sizeBytes)}）`);
-    if (driveOf(source) === driveOf(destination)) warnings.push(`源与目标同盘，不会释放空间：${source}`);
+    if (!room.ok && room.known) {
+      warnings.push(
+        pick(
+          locale,
+          `目标盘空间不足：${source}（需要 ${formatBytes(measured.sizeBytes)}）`,
+          `Not enough room on the target: ${source} (needs ${formatBytes(measured.sizeBytes)})`,
+        ),
+      );
+    }
+    if (driveOf(source) === driveOf(destination)) {
+      warnings.push(
+        pick(
+          locale,
+          `源与目标同盘，不会释放空间：${source}`,
+          `Source and destination are on the same drive, so nothing is freed: ${source}`,
+        ),
+      );
+    }
   }
 
   return {
@@ -456,18 +489,38 @@ export async function panelMigratePreview(
     targetRoot,
     targetFreeBytes: targetFree.bytes,
     targetKnown: targetFree.known,
-    needsConfigChange: configMigrateHints(args.paths),
+    needsConfigChange: configMigrateHints(args.paths, locale),
     warnings,
   };
 }
 
 /** 迁移后需要用户自己改的应用配置（面板只提示，不代改） */
-function configMigrateHints(paths: string[]): string[] {
+function configMigrateHints(paths: string[], locale: LocaleId = 'zh'): string[] {
   const hints: string[] = [];
-  if (paths.some((p) => /\.m2[\\/]repository/i.test(p))) hints.push('Maven：在 settings.xml 里设置 <localRepository> 指向新路径');
-  if (paths.some((p) => /npm-cache/i.test(p))) hints.push('npm：设置 npm config set cache 指向新路径');
-  if (paths.some((p) => /pip[\\/]cache/i.test(p))) hints.push('pip：设置 PIP_CACHE_DIR 指向新路径');
-  if (paths.some((p) => /\\uv$/i.test(p) || /[\\/]uv$/i.test(p))) hints.push('uv：设置 UV_CACHE_DIR 指向新路径');
+  if (paths.some((p) => /\.m2[\\/]repository/i.test(p))) {
+    hints.push(
+      pick(
+        locale,
+        'Maven：在 settings.xml 里设置 <localRepository> 指向新路径',
+        'Maven: point <localRepository> in settings.xml at the new path',
+      ),
+    );
+  }
+  if (paths.some((p) => /npm-cache/i.test(p))) {
+    hints.push(
+      pick(
+        locale,
+        'npm：设置 npm config set cache 指向新路径',
+        'npm: run npm config set cache to point at the new path',
+      ),
+    );
+  }
+  if (paths.some((p) => /pip[\\/]cache/i.test(p))) {
+    hints.push(pick(locale, 'pip：设置 PIP_CACHE_DIR 指向新路径', 'pip: set PIP_CACHE_DIR to the new path'));
+  }
+  if (paths.some((p) => /\\uv$/i.test(p) || /[\\/]uv$/i.test(p))) {
+    hints.push(pick(locale, 'uv：设置 UV_CACHE_DIR 指向新路径', 'uv: set UV_CACHE_DIR to the new path'));
+  }
   return hints;
 }
 
@@ -487,7 +540,15 @@ function targetsOfGrade(grade: 'safe' | 'caution'): string[] {
 /** 启动一次清理任务（异步返回 jobId，进度走 {@link panelProgress}） */
 export function panelStartCleanup(
   config: Config,
-  args: { paths?: string[]; grade?: 'safe' | 'caution'; mode?: 'trash' | 'permanent'; trashPath?: string; dryRun: boolean; elevation?: string },
+  args: {
+    paths?: string[];
+    grade?: 'safe' | 'caution';
+    mode?: 'trash' | 'permanent';
+    trashPath?: string;
+    dryRun: boolean;
+    elevation?: string;
+    locale?: LocaleId;
+  },
 ): { jobId: string } {
   const targets = args.paths ?? targetsOfGrade(args.grade ?? 'safe');
   const job = createJob('cleanup', args.dryRun);
@@ -515,6 +576,7 @@ export function panelStartCleanup(
         allowExplicitUnmatched: config.allowExplicitUnmatched,
         allowProtectedOverride: config.allowProtectedOverride,
         knownSizes: knownSizes(),
+        locale: normalizeLocale(args.locale),
         elevation: {
           dism: args.elevation === 'dism' || args.elevation === 'dism+cleanmgr',
           cleanmgr: args.elevation === 'cleanmgr' || args.elevation === 'dism+cleanmgr',
@@ -538,28 +600,41 @@ export function panelStartCleanup(
 /** 启动一次迁移任务 */
 export function panelStartMigration(
   config: Config,
-  args: { paths: string[]; targetDrive?: string; dryRun: boolean },
+  args: { paths: string[]; targetDrive?: string; dryRun: boolean; locale?: LocaleId },
 ): { jobId: string } {
   const job = createJob('migrate', args.dryRun);
+  const locale = normalizeLocale(args.locale);
   void (async () => {
     try {
       const drives = await listDrives();
       const requested = args.targetDrive?.replace(/:.*$/, '').toUpperCase();
       const target =
         requested === undefined ? pickMigrationTarget(drives) : drives.find((d) => d.letter === requested && !d.isSystem);
-      if (target === undefined) throw new Error('未找到可用的非系统盘作为迁移目标');
+      if (target === undefined) {
+        throw new Error(pick(locale, '未找到可用的非系统盘作为迁移目标', 'No usable non-system drive to migrate to'));
+      }
 
       const targetRoot = config.migrationRoot ?? path.join(driveRoot(target.letter), 'dsh-cc-migrated');
       await fs.mkdir(targetRoot, { recursive: true });
       const ledgerPath = path.join(targetRoot, MIGRATION_LEDGER_FILE);
       job.view.total = args.paths.length;
 
+      // 规则的 migrate.configHint 是权威建议（含具体命令），按语言取；面板据此提示用户改配置
+      const { ruleSet } = await loadRules({
+        extraRulesFile: config.extraRulesFile,
+        allowProtectedOverride: config.allowProtectedOverride,
+      });
+      const index = buildRuleIndex(ruleSet.rules);
+
       for (const source of args.paths) {
-        updateMessage(job, `迁移 ${source} → ${targetRoot}`);
+        updateMessage(job, pick(locale, `迁移 ${source} → ${targetRoot}`, `Migrating ${source} → ${targetRoot}`));
+        const matched = pickWinner(source, index)?.rule;
+        const hint = matched?.migrate?.configHint;
         const outcome = await migrateByJunction(source, {
           targetRoot,
           dryRun: args.dryRun,
           signal: job.controller.signal,
+          ...(hint === undefined ? {} : { advice: [ruleConfigHint(matched?.id, hint, locale)] }),
           onProgress: (message) => updateMessage(job, message),
         });
         if (!args.dryRun && outcome.status === 'migrated') {
@@ -570,7 +645,7 @@ export function panelStartMigration(
           path: source,
           sizeBytes: outcome.sizeBytes,
           action: outcome.status,
-          reason: migrateReason(outcome, args.dryRun),
+          reason: migrateReason(outcome, args.dryRun, locale),
         });
         job.view.done = job.view.items.length;
         job.view.plannedBytes += outcome.sizeBytes;
@@ -687,13 +762,34 @@ export function disposePanelJobs(): void {
   lastScan = undefined;
 }
 
-function migrateReason(outcome: { status: string; errors: string[]; advice: string[]; destination: string }, dryRun: boolean): string {
+function migrateReason(
+  outcome: { status: string; errors: string[]; advice: string[]; destination: string },
+  dryRun: boolean,
+  locale: LocaleId = 'zh',
+): string {
   if (outcome.errors.length > 0) return outcome.errors.join('；');
-  const advice = outcome.advice.length > 0 ? `（建议同步改配置：${outcome.advice.join('；')}）` : '';
-  if (dryRun) return `dryRun：未改动数据，计划 → ${outcome.destination}${advice}`;
-  if (outcome.status === 'migrated') return `已迁移到 ${outcome.destination}，原位置保留目录联接${advice}`;
-  if (outcome.status === 'rolled-back') return '已搬回原位置并删除目录联接';
-  return `状态：${outcome.status}${advice}`;
+  const advice =
+    outcome.advice.length > 0
+      ? pick(locale, `（建议同步改配置：${outcome.advice.join('；')}）`, ` (update the matching config too: ${outcome.advice.join('; ')})`)
+      : '';
+  if (dryRun) {
+    return pick(
+      locale,
+      `dryRun：未改动数据，计划 → ${outcome.destination}${advice}`,
+      `dryRun: no data touched, planned → ${outcome.destination}${advice}`,
+    );
+  }
+  if (outcome.status === 'migrated') {
+    return pick(
+      locale,
+      `已迁移到 ${outcome.destination}，原位置保留目录联接${advice}`,
+      `Migrated to ${outcome.destination}; a junction stays behind at the original location${advice}`,
+    );
+  }
+  if (outcome.status === 'rolled-back') {
+    return pick(locale, '已搬回原位置并删除目录联接', 'Moved back to the original location and the junction was removed');
+  }
+  return pick(locale, `状态：${outcome.status}${advice}`, `Status: ${outcome.status}${advice}`);
 }
 
 function createJob(kind: JobKind, dryRun: boolean): JobRecord {

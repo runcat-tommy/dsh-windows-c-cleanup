@@ -12,6 +12,7 @@
  */
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
+import { normalizeLocale, pick, ruleReason, type LocaleId } from '../i18n/index.js';
 import { normalizePath, pickWinner, type RuleIndex } from '../rules/match.js';
 import type { Grade } from '../rules/schema.js';
 
@@ -25,6 +26,8 @@ export interface GuardContext {
   allowProtectedOverride: boolean;
   /** 允许在非系统盘执行（默认 false） */
   allowNonSystemDrive?: boolean;
+  /** 拒绝理由的语言（默认中文；只有 Web 面板会传 'en'） */
+  locale?: LocaleId;
 }
 
 export type GuardVerdict =
@@ -91,14 +94,23 @@ async function findReparseAncestor(target: string): Promise<string | undefined> 
  */
 export async function guardTarget(target: string, ctx: GuardContext): Promise<GuardVerdict> {
   const normalized = normalizePath(target);
+  const locale = normalizeLocale(ctx.locale);
 
   // 盘根（'C:' / 'C:\' 归一化后都是 'c:'）：必须先判，否则会被当成「无盘符路径」
   if (/^[a-z]:?$/.test(normalized) || FORBIDDEN_EXACT.has(normalized)) {
-    return { allowed: false, ruleId: 'forbidden-root', reason: '盘根或系统关键目录，永远不允许作为清理目标' };
+    return {
+      allowed: false,
+      ruleId: 'forbidden-root',
+      reason: pick(locale, '盘根或系统关键目录，永远不允许作为清理目标', 'A drive root or critical system directory can never be a cleanup target'),
+    };
   }
 
   if (!/^[a-z]:\\/.test(normalized)) {
-    return { allowed: false, ruleId: 'invalid-path', reason: '不是带盘符的绝对路径' };
+    return {
+      allowed: false,
+      ruleId: 'invalid-path',
+      reason: pick(locale, '不是带盘符的绝对路径', 'Not an absolute path with a drive letter'),
+    };
   }
 
   const drive = driveLetter(normalized);
@@ -106,7 +118,11 @@ export async function guardTarget(target: string, ctx: GuardContext): Promise<Gu
     return {
       allowed: false,
       ruleId: 'out-of-scope',
-      reason: `本插件只在系统盘（${ctx.systemDrive}）上执行清理，${drive.toUpperCase()}: 不在职责范围内`,
+      reason: pick(
+        locale,
+        `本插件只在系统盘（${ctx.systemDrive}）上执行清理，${drive.toUpperCase()}: 不在职责范围内`,
+        `This plugin only cleans the system drive (${ctx.systemDrive}); ${drive.toUpperCase()}: is out of scope`,
+      ),
     };
   }
 
@@ -115,31 +131,69 @@ export async function guardTarget(target: string, ctx: GuardContext): Promise<Gu
   const isHardProtected = rule?.grade === 'protected' && rule.overridable === false;
 
   if (isHardProtected) {
-    return { allowed: false, ruleId: rule.id, grade: 'protected', reason: `保护名单（硬约束）：${rule.reason}` };
+    return {
+      allowed: false,
+      ruleId: rule.id,
+      grade: 'protected',
+      reason: pick(
+        locale,
+        `保护名单（硬约束）：${ruleReason(rule.id, rule.reason, locale)}`,
+        `Protected list (hard constraint): ${ruleReason(rule.id, rule.reason, locale)}`,
+      ),
+    };
   }
   if (rule?.grade === 'protected' && ctx.allowProtectedOverride !== true) {
-    return { allowed: false, ruleId: rule.id, grade: 'protected', reason: `保护名单：${rule.reason}` };
+    return {
+      allowed: false,
+      ruleId: rule.id,
+      grade: 'protected',
+      reason: pick(
+        locale,
+        `保护名单：${ruleReason(rule.id, rule.reason, locale)}`,
+        `Protected list: ${ruleReason(rule.id, rule.reason, locale)}`,
+      ),
+    };
   }
   if (!rule && !ctx.allowExplicitUnmatched) {
     if (segmentCount(normalized) < 3) {
-      return { allowed: false, ruleId: 'too-shallow', reason: '未收录规则库且路径过浅（层级不足 3 段），拒绝执行' };
+      return {
+        allowed: false,
+        ruleId: 'too-shallow',
+        reason: pick(
+          locale,
+          '未收录规则库且路径过浅（层级不足 3 段），拒绝执行',
+          'Not covered by the rule library and too shallow (fewer than 3 levels) — refused',
+        ),
+      };
     }
     return {
       allowed: false,
       ruleId: 'unmatched',
-      reason: '未收录规则库：按「不明即不删」原则拒绝（如确需清理，请先在规则库中登记）',
+      reason: pick(
+        locale,
+        '未收录规则库：按「不明即不删」原则拒绝（如确需清理，请先在规则库中登记）',
+        'Not covered by the rule library: refused under the "never delete what you do not understand" principle (register it in the rule library first if you really need it gone)',
+      ),
     };
   }
 
   const type = await lstatType(target);
   if (type === 'missing') {
-    return { allowed: false, ruleId: rule?.id ?? 'unmatched', reason: '路径不存在（可能已被清理或已被迁移）' };
+    return {
+      allowed: false,
+      ruleId: rule?.id ?? 'unmatched',
+      reason: pick(locale, '路径不存在（可能已被清理或已被迁移）', 'The path does not exist (it may already have been cleaned or migrated)'),
+    };
   }
   if (type === 'link') {
     return {
       allowed: false,
       ruleId: rule?.id ?? 'unmatched',
-      reason: '目录联接/符号链接不参与清理（避免误删链接目标；迁移项请用 rollback 处理）',
+      reason: pick(
+        locale,
+        '目录联接/符号链接不参与清理（避免误删链接目标；迁移项请用 rollback 处理）',
+        'Junctions and symlinks are never cleaned (to avoid deleting the link target; use rollback for migrated items)',
+      ),
     };
   }
 
@@ -148,7 +202,11 @@ export async function guardTarget(target: string, ctx: GuardContext): Promise<Gu
     return {
       allowed: false,
       ruleId: rule?.id ?? 'unmatched',
-      reason: `上级目录 ${reparseAncestor} 是目录联接，删除语义不确定，拒绝执行`,
+      reason: pick(
+        locale,
+        `上级目录 ${reparseAncestor} 是目录联接，删除语义不确定，拒绝执行`,
+        `The parent directory ${reparseAncestor} is a junction, so the deletion semantics are unclear — refused`,
+      ),
     };
   }
 
@@ -156,7 +214,10 @@ export async function guardTarget(target: string, ctx: GuardContext): Promise<Gu
     allowed: true,
     ruleId: rule?.id ?? 'explicit',
     grade: (rule?.grade ?? 'caution') as Grade,
-    reason: rule?.reason ?? '调用方显式指定且已开启 allowExplicitUnmatched',
+    reason:
+      rule === undefined
+        ? pick(locale, '调用方显式指定且已开启 allowExplicitUnmatched', 'Explicitly requested by the caller with allowExplicitUnmatched enabled')
+        : ruleReason(rule.id, rule.reason, locale),
   };
 }
 

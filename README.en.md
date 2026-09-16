@@ -1,5 +1,7 @@
 # dsh-windows-c-cleanup
 
+**English** ｜ [中文](README.md)
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that adds **Windows system-drive (C:) cleanup** as an auditable pipeline:
 
 > **Scan → five-tier grading → visual report → user selection → tiered execution / migration to another drive**
@@ -83,15 +85,34 @@ The tool returns drive info, reclaimable bytes per tier, the biggest top-N consu
 
 ### Cleanup panel (M5)
 
-The plugin registers a **conversation view tab** in the Web GUI (`conversation.view`, an additive `list` slot — it never replaces or destroys any existing surface). Open any session, switch to "磁盘清理", and go from "understand" to "select → preview → execute" without leaving the page.
+The plugin registers a **conversation view tab** in the Web GUI (`conversation.view`, an additive `list` slot — it never replaces or destroys any existing surface). Open any session, switch to "Disk cleanup", and go from "understand" to "select → preview → execute" without leaving the page.
 
 The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
 
+The toolbar is laid out as three tight groups, left to right:
+
+| Group | Controls | Purpose |
+| --- | --- | --- |
+| ① Scan | `Scope` select + `Scan C:` | Pick hotspots/full, then scan (shows "Rescan" once a scan exists) |
+| ② Selection | `<n> selected` + `Clear selection` | Live count and one-click reset |
+| ③ Run | `Delete mode` select + `Preview` + `?` + `Confirm and run` | The `?` help button sits right next to "Preview" |
+
+- **The `?` button** explains in place what a *preview (dry run)* is: it really runs the safety gate and the per-item plan, but touches no data; it also spells out the panel's three hard limits (per-item confirmation, refused items can never be executed, nothing beyond the elevation tasks is escalated).
 - Five-tier cards (🟢 safe / 🟡 caution / 🟠 migrate / 🔴 protected) with path, size and the reason for each verdict; protected entries **cannot be selected**;
 - Two-step execution: the "confirm" button unlocks only after a preview, and any change to the selection or mode invalidates that preview; permanent deletion additionally requires an explicit confirmation tick;
 - Real progress from the host's per-item accounting callback (not parsed log text), with a working "cancel job";
 - Migration preview showing source → destination, file count and whether the target volume has room; app config changes are only *suggested*, never applied silently;
 - Trend line at the top: time since the previous scan and which directories grew back.
+
+#### Bilingual UI (Chinese / English)
+
+Both the panel and the host text exist as **two complete sets** and follow the DSH locale automatically — there is no language switcher to click:
+
+- UI strings live in the client dictionary (`client/src/i18n.ts`, 112 keys per language). The tab label is a **thunk**, so switching the locale retitles the tab without re-registering anything;
+- Every panel call on the host RPC carries the current `locale`, so **host-generated text switches too**: every rule reason, all 12 safety-gate refusal sentences, the executor's per-item planned actions, migration config hints, and the scheduler status. English strings live in `src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id (101 rules + 6 long-term actions, guarded by tests that check coverage *and* that no Han character leaks into the English file);
+- **Chinese is the default**: the model tool path (`disk_cleanup`) never passes `locale`, so tool output is byte-for-byte what it always was; only the Web panel sends `en`;
+- A missing English entry always falls back to the Chinese original — never to an empty string;
+- Switching the language does **not** need a host restart, only a page refresh (dictionaries are registered by the client plugin, which re-delivers `t` on locale change).
 
 Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
 

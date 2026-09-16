@@ -14,6 +14,7 @@
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from '../config.js';
 import * as panel from './service.js';
+import { normalizeLocale, type LocaleId } from '../i18n/index.js';
 
 /** 通道名：绝对路径，且只用 CHANNEL_PATTERN 允许的字符 */
 export const PANEL_CHANNEL = '/dsh-c-cleanup';
@@ -45,19 +46,24 @@ function text(value: unknown): string {
 export function panelEndpoints(
   config: Config,
 ): Record<string, (payload: Record<string, unknown>) => unknown | Promise<unknown>> {
+  /** 界面语言：面板每次调用都会带上；缺省中文（模型工具那条路不传） */
+  const localeOf = (payload: Record<string, unknown>): LocaleId => normalizeLocale(payload.locale);
   return {
     state: () => panel.panelState(config),
-    scan: (payload) => panel.panelScan(config, { scope: payload.scope === 'full' ? 'full' : 'hotspots' }),
+    scan: (payload) =>
+      panel.panelScan(config, { scope: payload.scope === 'full' ? 'full' : 'hotspots', locale: localeOf(payload) }),
     preview: (payload) =>
       panel.panelPreview(config, {
         ...(Array.isArray(payload.paths) ? { paths: payload.paths as string[] } : {}),
         ...(payload.mode === 'permanent' ? { mode: 'permanent' as const } : {}),
         ...(payload.grade === 'caution' || payload.grade === 'safe' ? { grade: payload.grade } : {}),
+        locale: localeOf(payload),
       }),
     'migrate-preview': (payload) =>
       panel.panelMigratePreview(config, {
         paths: Array.isArray(payload.paths) ? (payload.paths as string[]) : [],
         ...(typeof payload.targetDrive === 'string' ? { targetDrive: payload.targetDrive } : {}),
+        locale: localeOf(payload),
       }),
     // 执行：dryRun 必须是显式布尔 —— 面板没有「省略即真删」的捷径
     execute: (payload) =>
@@ -65,6 +71,7 @@ export function panelEndpoints(
         ...(Array.isArray(payload.paths) ? { paths: payload.paths as string[] } : {}),
         mode: payload.mode === 'permanent' ? 'permanent' : 'trash',
         dryRun: payload.dryRun === true,
+        locale: localeOf(payload),
       }),
     migrate: (payload) =>
       panel.panelStartMigration(config, {

@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.1] — Bilingual panel + grouped toolbar and preview help
+
+### Added
+
+- **Bilingual UI** (follows the DSH locale; there is no manual switch):
+  - Client dictionary `client/src/i18n.ts` with 112 keys per language. The slot registers `locale: 'windows-c-cleanup'` so the framework injects the `t` seat, and the tab label is a **thunk**, so a locale switch retitles the tab without re-registering anything.
+  - **Host text is bilingual too**: every panel RPC carries `locale`, so rule reasons (`src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id), all 12 safety-gate refusals, the executor's per-item planned actions, migration config hints and the scheduler status all come back in the requested language.
+  - **Chinese stays the default**: the model tool path never passes `locale`, so its output is unchanged; a missing English entry falls back to the Chinese original and never renders an empty string.
+  - Switching the language needs a page refresh only — no `dsh web` restart.
+- **A `?` help button next to "Preview"** that explains in place what a preview is (it really runs the safety gate and the per-item plan but touches no data) and states the panel's three hard limits (per-item confirmation, refused items can never run, nothing is escalated beyond the elevation tasks).
+
+### Changed
+
+- **The toolbar is regrouped so related controls sit together**: ① Scope + Scan C: → ② "n selected" + Clear selection → ③ Delete mode + Preview + `?` + Confirm and run.
+- **`panelState.scheduler` is now structured** (`{enabled, running, intervalHours, alertFreePercent}`): the host no longer pushes Chinese sentences into the UI; the panel composes the wording per locale.
+
+### Tests
+
+- `npm run m5` gains section 10 (10 checks): English coverage (all 101 rules + 6 long-term actions, ids strictly aligned), no Han characters in the English file, same id differs per language, Chinese remains the default, missing entries fall back, English safety-gate refusals, locale passed through the RPC endpoint, and whether every rule seen in the last scan has an English version.
+- `npm run m5:client` gains section 5 (15 checks): identical key sets across dictionaries, no Chinese inside English values, placeholder interpolation, the slot declaring its locale namespace, a thunked tab label, a real render in both locales (English must contain no Han characters), rendering without a `t` seat, every call carrying a locale, the three toolbar groups and button order, and the presence plus expanded state of the help button.
+
 ## [0.5.0] — M5: Web GUI cleanup panel
 
 ### Added
