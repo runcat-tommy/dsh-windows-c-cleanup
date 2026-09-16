@@ -492,9 +492,31 @@ async function main(): Promise<void> {
     `扫描到 ${scannedRuleIds.length} 条规则｜未翻译：${untranslated.join(',') || '无'}`,
   );
 
+  // 占位符与关键口径不能在翻译里丢：丢了就是"看起来翻译了、实际把路径/权限说丢了"
+  const placeholderDrops = rulesZh.longTermActions
+    .map((action) => {
+      const zhTokens = [...new Set(`${action.detect} ${action.action} ${action.benefit}`.match(/%[A-Za-z_]+%/g) ?? [])];
+      const english = longTermText(action, 'en');
+      const enText = `${english.detect} ${english.detail} ${english.benefit}`;
+      return { id: action.id, missing: zhTokens.filter((token) => !enText.includes(token)) };
+    })
+    .filter((entry) => entry.missing.length > 0);
+  check(
+    '10.11 英文文案保留 %占位符%（翻译不得把环境变量丢掉）',
+    placeholderDrops.length === 0,
+    placeholderDrops.map((entry) => `${entry.id}: ${entry.missing.join(',')}`).join('｜') || '无丢失',
+  );
+  const elevationDrops = rulesZh.rules
+    .filter((rule) => /管理员|提权/.test(rule.reason))
+    .filter((rule) => !/admin|elevat/i.test(ruleReason(rule.id, rule.reason, 'en')));
+  check(
+    '10.12 中文提到「管理员/提权」的规则，英文也必须说清权限（不能翻丢关键前提）',
+    elevationDrops.length === 0,
+    elevationDrops.map((rule) => rule.id).join(',') || '全部保留',
+  );
+
   // ---------- 8. 卸载清理 ----------
-  console.log('\n--- 8. 卸载与清理 ---');
-  disposePanelJobs();
+  console.log('\n--- 8. 卸载与清理 ---');  disposePanelJobs();
   check('8.1 卸载后任务表清空（面板会显示「任务已随宿主重启消失」）', panelProgress(started.jobId).found === false);
   check('8.2 面板报告目录默认落在历史文件旁的 reports/', panelOutputDir({} as Config) === path.join(path.dirname(defaultHistoryPath()), 'reports'), panelOutputDir({} as Config));
 
