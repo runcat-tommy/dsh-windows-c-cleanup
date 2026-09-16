@@ -20,7 +20,6 @@ import {
   type PanelStateView,
   type PreviewView,
   type ScanView,
-  type TrendView,
 } from './api.js';
 import { detectLocale, makeTranslate, type Translate } from './i18n.js';
 
@@ -34,12 +33,11 @@ type TierKey = 'safe' | 'caution' | 'migrate' | 'protected';
  */
 export const MODULES = [
   'overview',
-  'trend',
   'toolbar',
+  'preview',
   'status',
   'candidates',
   'longterm',
-  'preview',
   'progress',
   'migration',
   'artifacts',
@@ -54,14 +52,6 @@ function ModuleTitle({ id, extra, t }: { id: ModuleKey; extra?: string; t: Trans
     </div>
   );
 }
-
-/**
- * 「确认执行」的五个门禁状态。
- *
- * `no-selection` / `need-preview` / `stale-preview` 三种都不可点，但**原因不同**，
- * 所以要分开说：以前一律提示"勾选或模式已变化"，用户勾了项目却看到"请重新预演"，无法理解。
- */
-export type ConfirmGate = 'busy' | 'no-selection' | 'need-preview' | 'stale-preview' | 'ready';
 
 /**
  * 一条提示句：**只存键与参数**，渲染时才用当前语言的 `t` 取文案。
@@ -82,16 +72,18 @@ export function noticeText(notice: Notice | undefined, t: Translate): string {
   return head + t(notice.extraKey, notice.extraParams);
 }
 
-export function confirmGate(input: {
-  selectedCount: number;
-  previewed: boolean;
-  previewFresh: boolean;
-  busy: boolean;
-}): ConfirmGate {
+/**
+ * 「确认执行」按钮的门禁（这个按钮**只存在于「预演结果」里**）。
+ *
+ * 用户要求把操作区里的「确认执行」移除，于是执行入口变成唯一一个、且只在预演之后才出现：
+ * 界面上不可能"没预演就执行"。剩下能拦住它的只有两件事：有任务在跑，以及永久删除还没勾确认框 ——
+ * 后者必须在按钮旁边写出原因（禁用按钮的 title 在多数浏览器里弹不出来）。
+ */
+export type RunGate = 'busy' | 'need-confirm' | 'ready';
+
+export function runGate(input: { busy: boolean; permanent: boolean; confirmed: boolean }): RunGate {
   if (input.busy) return 'busy';
-  if (input.selectedCount === 0) return 'no-selection';
-  if (!input.previewed) return 'need-preview';
-  if (!input.previewFresh) return 'stale-preview';
+  if (input.permanent && !input.confirmed) return 'need-confirm';
   return 'ready';
 }
 
@@ -146,30 +138,6 @@ function shortPath(target: string, max = 74): string {
 function percent(part: number, total: number): string {
   if (!Number.isFinite(part) || !Number.isFinite(total) || total <= 0) return '0%';
   return `${((part / total) * 100).toFixed(1)}%`;
-}
-
-function TrendLine({ trend, t }: { trend: TrendView; t: Translate }): JSX.Element {
-  const sign = trend.freeDeltaBytes >= 0 ? '+' : '−';
-  return (
-    <div className="wcc_trend">
-      {t('trend.line', {
-        hours: trend.hoursAgo.toFixed(1),
-        sign,
-        delta: formatBytes(Math.abs(trend.freeDeltaBytes)),
-        grown: trend.grown.length,
-        shrunk: trend.shrunk.length,
-      })}
-      {trend.grown.length === 0 ? null : (
-        <div className="wcc_trend_grown">
-          {trend.grown.slice(0, 3).map((item) => (
-            <div key={item.path} className="wcc_trend_row">
-              {t('trend.grownRow', { delta: formatBytes(item.deltaBytes), path: shortPath(item.path, 60) })}
-            </div>
-          ))}
-        </div>
-      )}
-    </div>
-  );
 }
 
 function TierCard(props: {
@@ -556,26 +524,90 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
   };
 
   /**
-   * 「确认执行」的门禁：**必须先预演**，而且预演必须对得上当前的勾选与删除方式。
-   * 抽成纯函数是为了让离线测试能把五个分支逐一钉住（以前这段判断重复写在 disabled 与 title 两处，
-   * 结果"没勾选"时也提示"请重新预演"，误导人）。
+   * 「确认执行」按钮的门禁（唯一的执行入口，在「预演结果」里）。
+   * 到这里预演必然已经跑过，所以只需要判断"有没有任务在跑"和"永久删除是否已勾确认框"。
    */
-  const gate = confirmGate({
-    selectedCount: selected.size,
-    previewed: preview !== undefined,
-    previewFresh: preview !== undefined && previewKey === selectionKey,
-    busy: busy !== '',
-  });
+  const runState = runGate({ busy: busy !== '', permanent: mode === 'permanent', confirmed: confirmPermanent });
   /** 门禁原因：直接显示在按钮旁边（禁用按钮的 title 在多数浏览器里弹不出来，只写 title 等于没写） */
-  const confirmHintText = (): string => {
-    if (gate === 'no-selection') return t('confirm.hintNoSelection');
-    if (gate === 'need-preview') return t('confirm.hintNeedPreview');
-    if (gate === 'stale-preview') return t('confirm.hintStale');
-    if (gate === 'ready') return t('confirm.hintReady');
+  const runHintText = (): string => {
+    if (runState === 'need-confirm') return t('confirm.hintPermanent');
+    if (runState === 'ready') return t('confirm.hintReady');
     return '';
   };
   const system = state?.drives.find((drive) => drive.isSystem);
   const usedBytes = system === undefined ? 0 : Math.max(0, system.totalBytes - system.freeBytes);
+
+  /**
+   * 「预演结果」区块：**紧跟在「操作区」下方**（用户要求把它上移）。
+   * 好处正是用户要的：点完「预演」，结果和它自己的「确认执行」按钮就在按钮下方，不用翻过四列候选卡片。
+   * 单独抽出来是因为它在 DOM 里的位置和它读取的状态都集中在 render 的这一处，方便以后整体挪动。
+   */
+  const previewSection =
+    preview === undefined ? null : (
+      <section className="wcc_section">
+        <ModuleTitle
+          id="preview"
+          t={t}
+          extra={
+            t('preview.title', { size: formatBytes(preview.plannedBytes), count: preview.items.length }) +
+            (preview.trashPath === undefined ? '' : t('preview.trashPath', { path: preview.trashPath }))
+          }
+        />
+        {preview.warnings.map((warning) => (
+          <div key={warning} className="wcc_warn">
+            ⚠️ {warning}
+          </div>
+        ))}
+        {preview.items.slice(0, 30).map((item) => (
+          <div key={item.path} className="wcc_row">
+            <span className={`wcc_tag wcc_tag_${item.kind}`}>{actionLabel(item.action)}</span>
+            <div className="wcc_row_main">
+              <div className="wcc_row_path" title={item.path}>
+                {shortPath(item.path)}
+              </div>
+              <div className="wcc_row_reason">
+                {formatBytes(item.sizeBytes)} ｜ {item.reason}
+              </div>
+            </div>
+          </div>
+        ))}
+        {preview.items.length > 30 ? <div className="wcc_empty">{t('preview.more', { shown: 30 })}</div> : null}
+        {preview.refused.length === 0 ? null : (
+          <div className="wcc_refused">
+            {t('preview.refused', { count: preview.refused.length })}
+            {preview.refused.slice(0, 8).map((item) => (
+              <div key={item.path} className="wcc_row_reason">
+                🚫 {shortPath(item.path, 56)} ｜ {item.reason}
+              </div>
+            ))}
+          </div>
+        )}
+        {mode === 'permanent' ? (
+          <div className="wcc_danger">
+            {t('preview.permanentWarn')}
+            <label className="wcc_field">
+              <input type="checkbox" checked={confirmPermanent} onChange={(event) => setConfirmPermanent(event.target.checked)} />
+              {t('preview.permanentConfirm')}
+            </label>
+          </div>
+        ) : null}
+        <div className="wcc_toolbar">
+          <button
+            type="button"
+            className="wcc_btn wcc_btn_primary"
+            disabled={runState !== 'ready'}
+            title={runHintText()}
+            onClick={() => void startExecute(false)}
+          >
+            {t('action.confirmBytes', { size: formatBytes(preview.plannedBytes) })}
+          </button>
+          <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void startExecute(true)}>
+            {t('preview.dryAgain')}
+          </button>
+          {runHintText() === '' ? null : <span className="wcc_confirm_hint">{runHintText()}</span>}
+        </div>
+      </section>
+    );
 
   return (
     <div className="wcc_panel">
@@ -607,15 +639,10 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
         </div>
       </header>
 
-      {state?.trend === undefined ? null : (
-        <div className="wcc_block">
-          <ModuleTitle id="trend" t={t} />
-          <TrendLine trend={state.trend} t={t} />
-        </div>
-      )}
-
-      {/* 三组相邻按钮：①范围+扫描 → ②已选+清空 → ③删除方式+预演+说明+确认执行
-          组后各有一个向右箭头，标明「先扫描 → 再选择 → 最后执行」的先后关系（纯装饰，读屏会跳过） */}
+      {/* 三组相邻按钮：①范围+扫描 → ②已选+清空 → ③删除方式+预演+说明
+          组后各有一个向右箭头，标明「先扫描 → 再选择 → 最后执行」的先后关系（纯装饰，读屏会跳过）。
+          注意：操作区**没有**「确认执行」——唯一的执行入口在下方「预演结果」里，
+          于是"没预演就执行"在界面上根本不可能发生（用户要求移除工具栏那个按钮）。 */}
       <div className="wcc_block">
         <ModuleTitle id="toolbar" t={t} />
         <div className="wcc_toolbar">
@@ -687,16 +714,6 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           >
             ?
           </button>
-          <button
-            type="button"
-            className="wcc_btn wcc_btn_primary"
-            disabled={gate !== 'ready'}
-            title={confirmHintText()}
-            onClick={() => void startExecute(false)}
-          >
-            {t('action.confirm')}
-          </button>
-          {confirmHintText() === '' ? null : <span className="wcc_confirm_hint">{confirmHintText()}</span>}
         </div>
         </div>
       </div>
@@ -711,6 +728,9 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           </button>
         </div>
       ) : null}
+
+      {/* 预演结果紧贴操作区（用户要求上移）：点完「预演」结果就在按钮下方，不用翻过候选卡片 */}
+      {preview === undefined ? null : previewSection}
 
       <div className="wcc_block">
         <ModuleTitle id="status" t={t} />
@@ -775,70 +795,6 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
             </div>
           )}
         </>
-      )}
-
-      {preview === undefined ? null : (
-        <section className="wcc_section">
-          <ModuleTitle
-            id="preview"
-            t={t}
-            extra={
-              t('preview.title', { size: formatBytes(preview.plannedBytes), count: preview.items.length }) +
-              (preview.trashPath === undefined ? '' : t('preview.trashPath', { path: preview.trashPath }))
-            }
-          />
-          {preview.warnings.map((warning) => (
-            <div key={warning} className="wcc_warn">
-              ⚠️ {warning}
-            </div>
-          ))}
-          {preview.items.slice(0, 30).map((item) => (
-            <div key={item.path} className="wcc_row">
-              <span className={`wcc_tag wcc_tag_${item.kind}`}>{actionLabel(item.action)}</span>
-              <div className="wcc_row_main">
-                <div className="wcc_row_path" title={item.path}>
-                  {shortPath(item.path)}
-                </div>
-                <div className="wcc_row_reason">
-                  {formatBytes(item.sizeBytes)} ｜ {item.reason}
-                </div>
-              </div>
-            </div>
-          ))}
-          {preview.items.length > 30 ? <div className="wcc_empty">{t('preview.more', { shown: 30 })}</div> : null}
-          {preview.refused.length === 0 ? null : (
-            <div className="wcc_refused">
-              {t('preview.refused', { count: preview.refused.length })}
-              {preview.refused.slice(0, 8).map((item) => (
-                <div key={item.path} className="wcc_row_reason">
-                  🚫 {shortPath(item.path, 56)} ｜ {item.reason}
-                </div>
-              ))}
-            </div>
-          )}
-          {mode === 'permanent' ? (
-            <div className="wcc_danger">
-              {t('preview.permanentWarn')}
-              <label className="wcc_field">
-                <input type="checkbox" checked={confirmPermanent} onChange={(event) => setConfirmPermanent(event.target.checked)} />
-                {t('preview.permanentConfirm')}
-              </label>
-            </div>
-          ) : null}
-          <div className="wcc_toolbar">
-            <button
-              type="button"
-              className="wcc_btn wcc_btn_primary"
-              disabled={busy !== '' || (mode === 'permanent' && !confirmPermanent)}
-              onClick={() => void startExecute(false)}
-            >
-              {t('action.confirmBytes', { size: formatBytes(preview.plannedBytes) })}
-            </button>
-            <button type="button" className="wcc_btn" disabled={busy !== ''} onClick={() => void startExecute(true)}>
-              {t('preview.dryAgain')}
-            </button>
-          </div>
-        </section>
       )}
 
       {migration === undefined ? null : (

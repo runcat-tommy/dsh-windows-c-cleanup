@@ -25,16 +25,12 @@ const PANEL_CSS = `
 .wcc_head_right{display:flex;gap:6px;flex-wrap:wrap}
 .wcc_chip{border:1px solid var(--dsw-alias-border-l1,#d0d7de);border-radius:10px;padding:2px 8px;
   color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}
-.wcc_trend{border-left:3px solid var(--dsw-alias-border-l2,#8250df);padding:6px 10px;border-radius:6px;
-  background:var(--dsw-alias-bg-subtle,#f6f8fa)}
-.wcc_trend_grown{margin-top:4px;color:var(--dsw-alias-label-secondary,#57606a);font-size:12px}
-.wcc_trend_row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcc_toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .wcc_group{display:flex;align-items:center;gap:6px}
 /*
  * 组间流向箭头（在「扫描」按钮后与「清空选择」按钮后各一个）：
  * 纯装饰、aria-hidden，左右留白刻意放大（12px + 组内 gap 6px = 每侧 18px），
- * 让「先扫描 → 再选择 → 最后执行」的先后关系一眼看清。
+ * 让「先扫描 → 再选择 → 最后预演」的先后关系一眼看清。
  */
 .wcc_arrow{align-self:center;margin:0 12px;color:var(--dsw-alias-label-secondary,#57606a);
   font-size:16px;line-height:1;font-weight:600;user-select:none;pointer-events:none}

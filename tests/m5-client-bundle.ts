@@ -11,7 +11,7 @@
  * 运行：npm run m5:client
  */
 import { readFileSync } from 'node:fs';
-import { MODULES, confirmGate, noticeText, type Notice } from '../client/src/panel.js';
+import { MODULES, noticeText, runGate, type Notice } from '../client/src/panel.js';
 import { Fragment, createElement, jsxImpl, reactStub, resetHooks } from './helpers/react-stub.js';
 
 const bundlePath = new URL('../client/client.js', import.meta.url);
@@ -260,10 +260,14 @@ if (typeof component === 'function') {
   const zhText = renderToText(component({ t: zhTranslate }));
   panelTextZh = zhText;
   const enText = renderToText(component({ t: enTranslate }));
-  check('5.8 中文环境下渲染出中文界面', zhText.includes('C 盘清理') && zhText.includes('预演') && zhText.includes('确认执行'), zhText.slice(0, 120));
+  check(
+    '5.8 中文环境下渲染出中文界面（含模块名标签）',
+    zhText.includes('C 盘清理') && zhText.includes('预演') && zhText.includes('概览') && zhText.includes('操作区'),
+    zhText.slice(0, 120),
+  );
   check(
     '5.9 英文环境下渲染出英文界面（无中文残留）',
-    enText.includes('C: drive cleanup') && enText.includes('Preview') && enText.includes('Confirm and run') && !/\p{Script=Han}/u.test(enText.replace(/[\u3001\uFF08\uFF09\uFF5C]/gu, '')),
+    enText.includes('C: drive cleanup') && enText.includes('Preview') && enText.includes('Overview') && enText.includes('Controls') && !/\p{Script=Han}/u.test(enText.replace(/[\u3001\uFF08\uFF09\uFF5C]/gu, '')),
     enText.slice(0, 160),
   );
 
@@ -287,11 +291,17 @@ if (typeof component === 'function') {
   const toolbar = toolbarIndex === -1 ? '' : zhText.slice(toolbarIndex, zhText.indexOf('</div>', zhText.indexOf('wcc_group', toolbarIndex)));
   const groups = (zhText.match(/class="wcc_group"/g) ?? []).length;
   check('5.13 工具栏分成三组相邻按钮', groups === 3, `wcc_group 出现 ${groups} 次`);
-  const order = ['范围', '扫描 C 盘', '已选', '清空选择', '删除方式', '预演', '确认执行'].map((token) => zhText.indexOf(token));
+  const order = ['范围', '扫描 C 盘', '已选', '清空选择', '删除方式'].map((token) => zhText.indexOf(token));
+  // 三个显眼动作按钮按顺序是「扫描 → 清空选择 → 预演」（第 3 个按钮的文本要单独取，
+  // 因为"预演"两个字在模块名「操作区（扫描 → 选择 → 预演）」里也出现）
+  const actionButtons = [...zhText.matchAll(/class="wcc_btn wcc_btn_action"/g)].map((match) => match.index ?? -1);
+  const labels = actionButtons.map((at) => (zhText.slice(at, at + 240).match(/>([^<>]{2,12})<\/button>/) ?? ['', ''])[1] ?? '');
   check(
-    '5.14 按钮顺序符合要求（范围→扫描｜已选→清空｜删除方式→预演→确认执行）',
-    order.every((index, position) => index >= 0 && (position === 0 || index > (order[position - 1] ?? -1))),
-    `位置：${order.join(', ')}`,
+    '5.14 操作区三组顺序符合要求（范围→扫描｜已选→清空｜删除方式→预演；执行按钮已移到预演结果里）',
+    order.every((index, position) => index >= 0 && (position === 0 || index > (order[position - 1] ?? -1))) &&
+      labels.join('|') === '扫描 C 盘|清空选择|预演' &&
+      (actionButtons[2] ?? -1) > (order[4] ?? 0),
+    `位置：${order.join(', ')}｜动作按钮：${labels.join(' → ')}`,
   );
   check(
     '5.15 「预演」旁边有问号说明按钮（点击展开说明）',
@@ -402,7 +412,7 @@ console.log('\n--- 6. 语言服务接入 ---');
   const enRendered = typeof localeComponent === 'function' ? renderToText(localeComponent({ t: fakeLocale.bind(i18n.LOCALE_NS) })) : '';
   check(
     '6.5 平台注入的 t seat 与 thunk 用同一套字典（英文界面一致）',
-    enRendered.includes('Confirm and run') && !/\p{Script=Han}/u.test(enRendered),
+    enRendered.includes('Controls') && enRendered.includes('Preview') && !/\p{Script=Han}/u.test(enRendered),
     enRendered.slice(0, 100),
   );
   check(
@@ -485,39 +495,39 @@ console.log('\n--- 7. 按钮与说明 icon 的可辨识度 ---');
   );
 }
 
-// ---------- 8. 「确认执行」的门禁与"为什么不能点" ----------
-console.log('\n--- 8. 「确认执行」门禁 ---');
+// ---------- 8. 执行入口唯一性 + 唯一入口的门禁 ----------
+console.log('\n--- 8. 执行入口唯一性与门禁 ---');
 {
-  const gateOf = (input: { selectedCount: number; previewed: boolean; previewFresh: boolean; busy?: boolean }): string =>
-    confirmGate({ busy: false, ...input });
-  check('8.1 没勾选 → no-selection（而不是"请重新预演"）', gateOf({ selectedCount: 0, previewed: false, previewFresh: false }) === 'no-selection');
-  check(
-    '8.2 勾了但没预演 → need-preview（这是最常见的困惑来源）',
-    gateOf({ selectedCount: 3, previewed: false, previewFresh: false }) === 'need-preview',
-  );
-  check(
-    '8.3 预演过但勾选/模式变了 → stale-preview',
-    gateOf({ selectedCount: 3, previewed: true, previewFresh: false }) === 'stale-preview',
-  );
-  check('8.4 预演且未变化 → ready（可点）', gateOf({ selectedCount: 3, previewed: true, previewFresh: true }) === 'ready');
-  check('8.5 忙时优先 → busy', confirmGate({ selectedCount: 3, previewed: true, previewFresh: true, busy: true }) === 'busy');
+  const g = (input: { busy?: boolean; permanent?: boolean; confirmed?: boolean }): string =>
+    runGate({ busy: false, permanent: false, confirmed: false, ...input });
+  check('8.1 普通删除且不在忙 → ready', g({}) === 'ready');
+  check('8.2 永久删除但没勾确认框 → need-confirm（必须说清为什么不能点）', g({ permanent: true }) === 'need-confirm');
+  check('8.3 永久删除且已勾确认 → ready', g({ permanent: true, confirmed: true }) === 'ready');
+  check('8.4 有任务在跑 → busy（优先于其它判定）', g({ permanent: true, busy: true }) === 'busy');
+  check('8.5 切到普通删除时确认框状态不再拦人', g({ permanent: false, confirmed: false }) === 'ready');
 
-  // 原因必须渲染在界面上：禁用按钮的 title 在多数浏览器里弹不出来
+  // 执行入口唯一：操作区里没有「确认执行」，它只在「预演结果」里
   const zhText = panelTextZh;
   check(
-    '8.6 不可点时必须看到原因（首屏未勾选 → 明确提示去勾选）',
-    zhText.includes('class="wcc_confirm_hint"') && zhText.includes('先在下面勾选要清理的项目'),
-    (zhText.match(/class="wcc_confirm_hint">[^<]*/) ?? ['(没有)'as string])[0] ?? '',
+    '8.6 首屏（还没预演）里根本没有执行按钮：整屏不出现「确认执行」',
+    !zhText.includes('确认执行') && zhText.includes('预演'),
+    `含"预演"=${zhText.includes('预演')}｜含"确认执行"=${zhText.includes('确认执行')}`,
+  );
+  const panelSource = readFileSync(new URL('../client/src/panel.tsx', import.meta.url), 'utf8');
+  const code = panelSource.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+  check(
+    '8.7 源码里只有一个执行入口（action.confirmBytes 在预演结果里），操作区不再挂 action.confirm',
+    code.includes("t('action.confirmBytes'") && !code.includes("t('action.confirm')"),
   );
   check(
-    '8.7 原因文案在中英两套字典里都有（键集合一致由 5.1 兜底）',
-    ['confirm.hintNoSelection', 'confirm.hintNeedPreview', 'confirm.hintStale', 'confirm.hintReady'].every(
-      (key) => (i18n.DICTS.zh[key]?.length ?? 0) > 0 && (i18n.DICTS.en[key]?.length ?? 0) > 0,
-    ),
+    '8.8 不可点时的原因仍写在按钮旁边（永久删除那条提示中英齐备）',
+    (i18n.DICTS.zh['confirm.hintPermanent']?.length ?? 0) > 0 &&
+      (i18n.DICTS.en['confirm.hintPermanent']?.length ?? 0) > 0 &&
+      code.includes('runHintText()'),
   );
   const hintBlock = source.slice(source.indexOf('.wcc_confirm_hint{'), source.indexOf('.wcc_confirm_hint{') + 160);
   check(
-    '8.8 提示样式是小字次要色（看得见但不抢眼）',
+    '8.9 提示样式是小字次要色（看得见但不抢眼）',
     /font-size:12px/.test(hintBlock) && /label-secondary/.test(hintBlock),
     hintBlock.slice(0, 90),
   );
@@ -558,9 +568,10 @@ console.log('\n--- 10. 功能模块名 ---');
 {
   const modules = [...MODULES];
   check(
-    '10.1 每个功能模块都有名字：中英字典各 10 条 module.* 且不为空',
-    modules.length === 10 &&
-      modules.every((id) => (i18n.DICTS.zh[`module.${id}`]?.length ?? 0) > 0 && (i18n.DICTS.en[`module.${id}`]?.length ?? 0) > 0),
+    '10.1 每个功能模块都有名字：中英字典各 9 条 module.* 且不为空（历史对比已按用户要求移除）',
+    modules.length === 9 &&
+      modules.every((id) => (i18n.DICTS.zh[`module.${id}`]?.length ?? 0) > 0 && (i18n.DICTS.en[`module.${id}`]?.length ?? 0) > 0) &&
+      !modules.includes('trend' as never),
     modules.map((id) => `${id}=${i18n.DICTS.zh[`module.${id}`]}`).join(' ｜ '),
   );
   check(
@@ -580,11 +591,28 @@ console.log('\n--- 10. 功能模块名 ---');
     alwaysOn.every((id, index) => at(id) >= 0 && countOf(id) === 1 && (index === 0 || at(id) > at(alwaysOn[index - 1]!))),
     alwaysOn.map((id) => `${id}@${at(id)}`).join(' '),
   );
-  const conditional = ['trend', 'candidates', 'longterm', 'preview', 'progress', 'migration'] as const;
+  const conditional = ['candidates', 'longterm', 'preview', 'progress', 'migration'] as const;
   check(
-    '10.4 没有数据时不空挂模块标题（历史对比/清理候选/长期防护/预演/进度/迁移都不出现）',
+    '10.4 没有数据时不空挂模块标题（清理候选/长期防护/预演结果/执行进度/迁移预览都不出现）',
     conditional.every((id) => at(id) === -1),
     conditional.filter((id) => at(id) >= 0).join(',') || '都不出现（符合预期）',
+  );
+  check(
+    '10.7 模块顺序：概览 → 操作区 → （预演结果） → 状态与提示 → 记录与产物',
+    at('overview') < at('toolbar') &&
+      at('toolbar') < at('status') &&
+      at('status') < at('artifacts') &&
+      (() => {
+        // 源码里的渲染位置：预演结果夹在「操作区」与「状态与提示」之间（用户要求上移）
+        const code = readFileSync(new URL('../client/src/panel.tsx', import.meta.url), 'utf8')
+          .replace(/\/\*[\s\S]*?\*\//g, '')
+          .replace(/^\s*\/\/.*$/gm, '');
+        const toolbarAt = code.indexOf('id="toolbar"');
+        const previewAt = code.indexOf('{preview === undefined ? null : previewSection}');
+        const statusAt = code.indexOf('id="status"');
+        return toolbarAt > 0 && toolbarAt < previewAt && previewAt < statusAt;
+      })(),
+    `overview@${at('overview')} toolbar@${at('toolbar')} status@${at('status')} artifacts@${at('artifacts')}`,
   );
   const readmeZh = readFileSync(new URL('../README.md', import.meta.url), 'utf8');
   const readmeEn = readFileSync(new URL('../README.en.md', import.meta.url), 'utf8');

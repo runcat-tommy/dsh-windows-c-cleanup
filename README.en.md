@@ -102,15 +102,21 @@ Top to bottom, each block has a small fixed-name label in its top-left corner (o
 | Module | Where | What is inside |
 | --- | --- | --- |
 | **Overview** | the header, top of the panel | drive free/total and used percentage; two chips on the right: migration target (letter + free space) and the scheduled-scan switch |
-| **Trend** | under the header (appears once history exists) | time since the previous scan, free-space delta, directories that grew back, space that was reclaimed |
-| **Controls (scan → select → run)** | above the main body | three tight groups with right-pointing arrows between them: ① Scope + Scan C: ② "n selected" + Clear selection ③ Delete mode + Preview + `?` + Confirm and run |
-| **Status & notices** | under the controls | what is running now (⏳), the result notice of the last action, errors, and the warning shown when the scan hit its time budget |
+| **Controls (scan → select → preview)** | under the header | three tight groups with right-pointing arrows between them: ① Scope + Scan C: ② "n selected" + Clear selection ③ Delete mode + Preview + `?`. **There is no "Confirm and run" here** — the run entry point lives only in "Preview result" |
+| **Preview result** | **directly under the controls** (appears after clicking Preview) | what would happen to each item (move to staging / permanent delete / needs elevation / refused), the total that would be freed, and the refusal list; **the panel's only "Confirm and run" button sits here**, next to "dry run again". The dynamic text beside the title is *what this particular preview worked out* |
+| **Status & notices** | under the preview result | what is running now (⏳), the result notice of the last action, errors, and the warning shown when the scan hit its time budget |
 | **Cleanup candidates (🟢/🟡/🟠/🔴)** | the four cards in the middle | Safe to delete / Delete with care / Better migrated / Protected list, each item with path, size and reason; protected entries cannot be selected |
 | **Long-term protections** | under the cards (collapsible) | the 6 long-term measures where changing settings or habits beats repeated cleanup |
-| **Preview result** | appears under the cards after clicking Preview | what would happen to each item (move to staging / permanent delete / needs elevation / refused), the total that would be freed, and the refusal list; the run buttons sit at the bottom. The dynamic text next to the title is *what this particular preview worked out* |
-| **Run progress** | appears after clicking Confirm and run | job id and status, progress bar (from the host's per-item accounting), item-by-item detail, freed bytes, cancel button |
+| **Run progress** | appears after clicking Confirm and run (under the cards) | job id and status, progress bar (from the host's per-item accounting), item-by-item detail, freed bytes, cancel button |
 | **Migration preview** | appears after clicking a card's "Preview migration" | source → destination mapping, file count, whether the target drive has room, and app config you must change yourself; the migrate buttons sit at the bottom |
 | **Records & artifacts** | the very bottom of the panel | absolute paths of the history ledger and the report directory (reports are written to disk and stay in Chinese) |
+
+Two things are worth noting:
+
+- **"Preview result" is the only dynamic block that moved up to sit right under the controls** (the other dynamic blocks stay below the candidate cards). So after clicking Preview, the result and its run button appear directly beneath the buttons you just clicked — no scrolling past four columns of cards; when there is no preview, that spot goes to "Status & notices", so a finished scan reports right under the controls too.
+- **There is exactly one run entry point**: "Confirm and run" exists only inside "Preview result". The toolbar no longer offers one, so "run without previewing" has no entry point in the UI at all (the host-side `guardTargets` and `dryRun` contract is unchanged and remains the real defence). Changing the selection or delete mode after a preview voids it, the whole block disappears and you preview again; with permanent deletion and no confirmation tick the button is disabled and **the reason is written next to it** (checks 8.1–8.9).
+- On request, the former "Trend" module (time since the previous scan, directories that grew back) was removed from the UI; the host still returns `state.trend`, so it can be wired back whenever you want it.
+
 
 The toolbar is laid out as three tight groups with a right-pointing arrow after the first two, left to right:
 
@@ -118,27 +124,26 @@ The toolbar is laid out as three tight groups with a right-pointing arrow after 
 | --- | --- | --- |
 | ① Scan | `Scope` select + `Scan C:` | Pick hotspots/full, then scan (shows "Rescan" once a scan exists) → |
 | ② Selection | `<n> selected` + `Clear selection` | Live count and one-click reset → |
-| ③ Run | `Delete mode` select + `Preview` + `?` + `Confirm and run` | The `?` help button sits right next to "Preview" |
+| ③ Preview | `Delete mode` select + `Preview` + `?` | The `?` help button sits right next to "Preview"; the run button is *not* here (see "Preview result") |
 
-The arrows are purely decorative (`aria-hidden`, skipped by screen readers) and carry 12px of margin on each side on top of the group's 6px gap, so the flow reads clearly as "scan first → then select → finally run".
+The arrows are purely decorative (`aria-hidden`, skipped by screen readers) and carry 12px of margin on each side on top of the group's 6px gap, so the flow reads clearly as "scan first → then select → finally preview".
 
 **Visual affordance** (deliberately tuned, not the default look):
 
 - The three action buttons "Scan C:", "Clear selection" and "Preview" get a thick brand-coloured outline, a tinted fill, a drop shadow and semi-bold text **while they are enabled**, so they read as buttons at a glance. **While disabled they keep the original flat look** (pale background, grey border, translucent) — a button you cannot press must never be drawn as if you could;
-- "Confirm and run" stays solid brand-coloured: solid means the final action, outlined means an ordinary clickable action, so the hierarchy never blurs;
+- "Confirm and run" (inside "Preview result") stays solid brand-coloured: solid means the final action, outlined means an ordinary clickable action, so the hierarchy never blurs;
 - The `?` next to "Preview" is a 24px round button (2px brand outline, tinted fill, bold question mark, grows on hover). Opening it explains in place, in deliberately plain words: the first line is "Clicking Preview runs a dry run — nothing is deleted", then three bullet points (it really checks what may be deleted / it really counts permissions and space / it says what would happen to each item), and only then two caveats (the numbers are estimates, and locked files are invisible to a preview).
 
 - Five-tier cards (🟢 safe / 🟡 caution / 🟠 migrate / 🔴 protected) with path, size and the reason for each verdict; protected entries **cannot be selected**;
-- Two-step execution: the "confirm" button unlocks only after a preview, and any change to the selection or mode invalidates that preview; permanent deletion additionally requires an explicit confirmation tick. **While "Confirm and run" is disabled, the reason is written right next to it** — a tooltip on a disabled button never appears in most browsers, so a tooltip alone explains nothing: nothing ticked → "tick the items first"; ticked but not previewed → "click Preview"; previewed and then changed → "click Preview again" (all five states come from one pure `confirmGate()` function, pinned by checks 8.1–8.8);
+- Two-step execution: **there is exactly one run entry point**, inside "Preview result" — so a preview is a precondition, not a suggestion. Any change to the selection or mode voids the preview, the block disappears and you preview again. The only remaining gate is "permanent deletion without the confirmation tick", and **the reason is written right next to the button** (a tooltip on a disabled button never appears in most browsers, so a tooltip alone explains nothing) — decided by the pure `runGate()` function, pinned by checks 8.1–8.9;
 - Real progress from the host's per-item accounting callback (not parsed log text), with a working "cancel job";
-- Migration preview showing source → destination, file count and whether the target volume has room; app config changes are only *suggested*, never applied silently;
-- Trend line at the top: time since the previous scan and which directories grew back.
+- Migration preview showing source → destination, file count and whether the target volume has room; app config changes are only *suggested*, never applied silently.
 
 #### Bilingual UI (Chinese / English)
 
 Both the panel and the host text exist as **two complete sets** and follow the DSH locale automatically — there is no language switcher to click:
 
-- UI strings live in the client dictionary (`client/src/i18n.ts`, 115 keys per language, key sets identical). The tab label is a **thunk**, so switching the locale retitles the tab without re-registering anything;
+- UI strings live in the client dictionary (`client/src/i18n.ts`, 120 keys per language, key sets identical). The tab label is a **thunk**, so switching the locale retitles the tab without re-registering anything;
 - Every panel call on the host RPC carries the current `locale`, so **host-generated text switches too**: every rule reason, all 12 safety-gate refusal sentences, the executor's per-item planned actions, migration config hints, and the scheduler status. English strings live in `src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id (101 rules + 6 long-term actions, guarded by tests that check coverage *and* that no Han character leaks into the English file);
 - **Switching the locale never makes you rescan** (the `scan-view` endpoint): rule reasons and truncation warnings are strings the host rendered *at scan time*, so they would normally stay in the old language. The host therefore exposes "re-render the cached scan in the target language" (no disk access, no measurements — measured at 0 ms), and the panel calls it whenever the locale changes, re-running the preview and migration preview alongside it so the UI is never half-translated (a real screenshot exposed exactly this);
 - **Notices store a key + params**, not a rendered string (`Notice` in `client/src/panel.tsx`): the text is produced at render time with the current `t`, so "Scan complete…" / "Preview ready…" follow the locale instead of freezing in the language they were created in (the type also forbids passing a plain string);

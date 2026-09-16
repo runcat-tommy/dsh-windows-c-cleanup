@@ -28,13 +28,10 @@ const ZH: Record<string, string> = {
   'chip.scheduler.off': '定时扫描：未启用',
   'chip.scheduler.running': '定时扫描：正在扫描…',
   'chip.scheduler.on': '定时扫描：每 {hours} 小时一次，低于 {percent}% 告警',
-  'trend.line': '📈 与上次扫描（{hours} 小时前）：剩余空间 {sign}{delta} ｜ 长回来 {grown} 项 ｜ 被释放 {shrunk} 项',
-  'trend.grownRow': '＋{delta}　{path}',
 
-  // 功能模块名（面板每个区块左上角的标签；README「功能区对照表」与测试 10.1–10.4 对齐这套名字）
+  // 功能模块名（面板每个区块左上角的标签；README「功能区对照表」与测试 10.1–10.6 对齐这套名字）
   'module.overview': '概览',
-  'module.trend': '历史对比',
-  'module.toolbar': '操作区（扫描 → 选择 → 执行）',
+  'module.toolbar': '操作区（扫描 → 选择 → 预演）',
   'module.status': '状态与提示',
   'module.candidates': '清理候选（🟢/🟡/🟠/🔴）',
   'module.longterm': '长期防护',
@@ -56,9 +53,8 @@ const ZH: Record<string, string> = {
   'action.preview': '预演',
   'action.confirm': '确认执行',
   'action.confirmBytes': '确认执行（{size}）',
-  'confirm.hintStale': '勾选或删除方式变了，请重新点「预演」',  'confirm.hintReady': '按预演过的动作执行',
-  'confirm.hintNoSelection': '先在下面勾选要清理的项目',
-  'confirm.hintNeedPreview': '还要先点「预演」——看清会发生什么才能执行',
+  'confirm.hintReady': '按预演过的动作执行',
+  'confirm.hintPermanent': '永久删除要先勾选上面的确认框',
 
   'help.preview.title': '预演是做什么的？',
   'help.preview.toggle': '预演说明',
@@ -175,13 +171,10 @@ const EN: Record<string, string> = {
   'chip.scheduler.off': 'Scheduled scan: disabled',
   'chip.scheduler.running': 'Scheduled scan: running…',
   'chip.scheduler.on': 'Scheduled scan: every {hours} h, alert below {percent}%',
-  'trend.line': '📈 Since the previous scan ({hours} h ago): free space {sign}{delta} ｜ grew back {grown} ｜ reclaimed {shrunk}',
-  'trend.grownRow': '+{delta}　{path}',
 
-  // Module names (the label at the top-left of every block; the README "module map" and checks 10.1–10.4 track these)
+  // Module names (the label at the top-left of every block; the README "module map" and checks 10.1–10.6 track these)
   'module.overview': 'Overview',
-  'module.trend': 'Trend',
-  'module.toolbar': 'Controls (scan → select → run)',
+  'module.toolbar': 'Controls (scan → select → preview)',
   'module.status': 'Status & notices',
   'module.candidates': 'Cleanup candidates (🟢/🟡/🟠/🔴)',
   'module.longterm': 'Long-term protections',
@@ -203,10 +196,8 @@ const EN: Record<string, string> = {
   'action.preview': 'Preview',
   'action.confirm': 'Confirm and run',
   'action.confirmBytes': 'Confirm and run ({size})',
-  'confirm.hintStale': 'Selection or delete mode changed — click Preview again',
   'confirm.hintReady': 'Run exactly the actions you previewed',
-  'confirm.hintNoSelection': 'Tick the items you want to clean below first',
-  'confirm.hintNeedPreview': 'One more step: click Preview so you can see what will happen',
+  'confirm.hintPermanent': 'Tick the confirmation box above to allow permanent deletion',
 
   'help.preview.title': 'What does Preview do?',
   'help.preview.toggle': 'About the preview',
