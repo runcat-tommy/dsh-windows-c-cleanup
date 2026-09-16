@@ -3,6 +3,9 @@ node_modules/
 lib/
 *.tgz
 
+# 本机 lockfile 会记录绝对路径（含用户名），不入库
+package-lock.json
+
 # 插件运行产物：报告与日志不应入库
 C盘清理报告-*.md
 C盘清理执行报告-*.md
