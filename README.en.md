@@ -112,7 +112,7 @@ Both the panel and the host text exist as **two complete sets** and follow the D
 - Every panel call on the host RPC carries the current `locale`, so **host-generated text switches too**: every rule reason, all 12 safety-gate refusal sentences, the executor's per-item planned actions, migration config hints, and the scheduler status. English strings live in `src/rules/default-rules.en.json`, aligned with Chinese strictly by rule id (101 rules + 6 long-term actions, guarded by tests that check coverage *and* that no Han character leaks into the English file);
 - **Chinese is the default**: the model tool path (`disk_cleanup`) never passes `locale`, so tool output is byte-for-byte what it always was; only the Web panel sends `en`;
 - A missing English entry always falls back to the Chinese original — never to an empty string;
-- Switching the language does **not** need a host restart, only a page refresh (dictionaries are registered by the client plugin, which re-delivers `t` on locale change).
+- **Wiring has an ordering requirement**: dictionaries must be registered *before* the framework renders a registration that declares `locale:`, so the client plugin waits for the locale service with `ctx.inject(['locale'])`. `dsh.client.inject` therefore lists `@deepseek-ai/dsh-client-locale` too — that is a package-metadata change, so the first upgrade needs a **`dsh web` restart**; after that, text changes only need a page refresh.
 
 Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
 

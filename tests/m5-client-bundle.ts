@@ -296,5 +296,97 @@ if (typeof component === 'function') {
   );
 }
 
+// ---------- 6. 语言服务接入（时序：等 locale 就绪再接线） ----------
+console.log('\n--- 6. 语言服务接入 ---');
+{
+  const dictCalls: Array<{ ns: string; locale: string; keys: number }> = [];
+  let active = 'zh';
+  const bound = new Map<string, (key: string, params?: Record<string, unknown>) => string>();
+  const fakeLocale = {
+    register: (ns: string, locale: string, dict: Record<string, string>) => {
+      dictCalls.push({ ns, locale, keys: Object.keys(dict).length });
+      return () => {};
+    },
+    // 平台语义：bind 出来的翻译函数是"活"的，调用时按当时的语言渲染
+    bind: (ns: string) => {
+      const cached = bound.get(ns);
+      if (cached !== undefined) return cached;
+      const live = (key: string): string => (active === 'en' ? i18n.DICTS.en[key] : i18n.DICTS.zh[key]) ?? key;
+      bound.set(ns, live);
+      return live;
+    },
+    getLocale: () => ({ active, locales: [{ id: 'zh', label: '中文' }, { id: 'en', label: 'English' }], revision: active === 'en' ? 2 : 1 }),
+  };
+
+  const injected: string[] = [];
+  const registrations: Array<{ options: Record<string, unknown> }> = [];
+  const localeApiCalls: Array<{ endpoint: string; payload: unknown }> = [];
+  const localeCtx = {
+    effect: (callback: () => (() => void) | void) => {
+      callback();
+      return () => {};
+    },
+    get: (name: string) =>
+      name === 'locale' ? fakeLocale : name === 'connection' ? {
+        rpc: {
+          call: (_c: string, endpoint: string, payload: unknown) => {
+            localeApiCalls.push({ endpoint, payload });
+            return Promise.resolve({ ok: true, value: fakeState });
+          },
+        },
+      } : undefined,
+    inject: (names: string[], callback: () => void) => {
+      injected.push(...names);
+      callback();
+    },
+    slots: {
+      inject: (_key: string, callback: () => unknown) => callback(),
+      register: (options: Record<string, unknown>, component: (props: unknown) => unknown) => {
+        registrations.push({ options, component });
+        return () => {};
+      },
+    },
+  };
+
+  try {
+    (exports_.apply as (ctx: unknown) => void)(localeCtx);
+    check('6.1 有 ctx.inject 时先等 locale 服务就绪再接线', injected.join(',') === 'locale', JSON.stringify(injected));
+  } catch (error) {
+    check('6.1 有 ctx.inject 时先等 locale 服务就绪再接线', false, String(error));
+  }
+  check(
+    '6.2 中英两套字典都登记到同一个命名空间（缺一套就是半翻译）',
+    dictCalls.length === 2 &&
+      dictCalls.every((call) => call.ns === i18n.LOCALE_NS) &&
+      dictCalls.map((call) => call.locale).sort().join(',') === 'en,zh' &&
+      dictCalls.every((call) => call.keys > 100),
+    JSON.stringify(dictCalls),
+  );
+  const localeLabel = registrations[0]?.options.label;
+  check(
+    '6.3 tab 标题 thunk 走平台 bind（活翻译函数）',
+    typeof localeLabel === 'function' && (localeLabel as () => string)() === '磁盘清理',
+    String(typeof localeLabel === 'function' ? (localeLabel as () => string)() : localeLabel),
+  );
+  active = 'en';
+  check(
+    '6.4 语言切到英文后，同一个 thunk 立刻返回英文标题（无需重新注册）',
+    (localeLabel as () => string)() === 'Disk cleanup',
+    (localeLabel as () => string)(),
+  );
+  const localeComponent = registrations[0]?.component;
+  const enRendered = typeof localeComponent === 'function' ? renderToText(localeComponent({ t: fakeLocale.bind(i18n.LOCALE_NS) })) : '';
+  check(
+    '6.5 平台注入的 t seat 与 thunk 用同一套字典（英文界面一致）',
+    enRendered.includes('Confirm and run') && !/\p{Script=Han}/u.test(enRendered),
+    enRendered.slice(0, 100),
+  );
+  check(
+    '6.6 面板调用带上语言服务当前的语言（en）',
+    localeApiCalls.length > 0 && localeApiCalls.every((call) => (call.payload as { locale?: string })?.locale === 'en'),
+    JSON.stringify(localeApiCalls[0]?.payload),
+  );
+}
+
 console.log(`\n=== 结果：${failed === 0 ? '全部通过' : `${failed} 项失败`} ===`);
 if (failed > 0) process.exitCode = 1;

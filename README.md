@@ -199,7 +199,7 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 - 面板每次调用宿主 RPC 都会带上当前 `locale`，所以**宿主生成的文案**也跟着切换：规则库的每一条判定理由、安全闸的 12 条拒绝理由、执行器的逐项计划动作、迁移配置提示、调度状态。英文文案放在 `src/rules/default-rules.en.json`，按规则 id 与中文严格对齐（101 条规则 + 6 条长期防护，有测试守着覆盖率和「英文里不得出现中文」）；
 - **默认中文**：模型工具（`disk_cleanup`）那条路不传 `locale`，输出与历史完全一致；只有 Web 面板会传 `en`；
 - 英文缺项一律回退中文原文，宁可显示中文也不显示空洞；
-- 宿主重启后语言切换才生效？不需要——**刷新页面即可**（字典注册在客户端插件里，语言切换会重新下发 `t`）。
+- **接线有时序要求**：字典必须在框架渲染带 `locale:` 的注册项**之前**登记好，所以客户端插件用 `ctx.inject(['locale'])` 等语言服务就绪再接线；相应地 `dsh.client.inject` 里也声明了 `@deepseek-ai/dsh-client-locale`（这属于包元数据变更 → 首次升级要**重启 `dsh web`**，之后改文案只刷新页面即可）。
 
 浏览器与宿主之间走 Connection 的通用 RPC 通道 `/dsh-c-cleanup`（`authority: loopback`，只接受本机调用），端点包括 `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` 等。任务表是宿主内存态，宿主重启即清空。
 

@@ -128,9 +128,11 @@ interface ClientContextLike {
   effect(callback: () => (() => void) | void, label?: string): unknown;
   get(name: string): unknown;
   slots: SlotsLike;
+  /** cordis 的服务等待：等 locale 服务就绪再跑回调（拿不到就退化成立即执行） */
+  inject?(names: string[], callback: (scope: ClientContextLike) => void): unknown;
 }
 
-/** 硬依赖：插槽注册表。connection / locale 都用 ctx.get 软取，不做硬依赖 */
+/** 硬依赖：插槽注册表。connection 用 ctx.get 软取，不做硬依赖 */
 export const inject = ['slots'];
 
 export function apply(ctx: ClientContextLike): void {
@@ -148,48 +150,62 @@ export function apply(ctx: ClientContextLike): void {
     };
   }, 'windows-c-cleanup: panel css');
 
-  // 语言：有 locale 服务就登记中英两套字典（平台要求"双语齐备"），并借它的 bind 拿稳定翻译函数；
-  // 没有（非 Web 宿主 / 极简装配）就退回按浏览器语言自选字典，面板照样能用。
-  const locale = ctx.get('locale') as LocaleRuntimeLike | undefined;
-  if (locale !== undefined && typeof locale.register === 'function') {
-    ctx.effect(() => {
-      const disposers = [
-        locale.register(LOCALE_NS, 'zh', DICTS.zh),
-        locale.register(LOCALE_NS, 'en', DICTS.en),
-      ];
-      return () => {
-        for (const dispose of disposers) dispose();
-      };
-    }, 'windows-c-cleanup: locale dicts');
-  }
-  const activeLocale = (): LocaleId =>
-    locale === undefined ? detectLocale() : normalizeLocale(locale.getLocale?.().active);
-  const translate: Translate =
-    locale !== undefined && typeof locale.bind === 'function'
-      ? locale.bind(LOCALE_NS)
-      : makeTranslate(detectLocale());
+  /**
+   * 面板接线。
+   *
+   * 时序很重要：字典必须**先登记**（框架渲染带 `locale:` 的注册项时找不到对应字典会显式报错），
+   * 而 `apply` 执行的瞬间语言服务未必就绪。所以这里用 `ctx.inject(['locale'])` 等服务到位再接线；
+   * 拿不到 `inject`（非 Web 宿主 / 离线测试替身）就立即接线，并退化到"按浏览器语言自选字典"。
+   */
+  const wireUp = (): void => {
+    const locale = ctx.get('locale') as LocaleRuntimeLike | undefined;
+    const hasLocale = locale !== undefined && typeof locale.register === 'function';
+    if (hasLocale && locale !== undefined) {
+      ctx.effect(() => {
+        const disposers = [locale.register(LOCALE_NS, 'zh', DICTS.zh), locale.register(LOCALE_NS, 'en', DICTS.en)];
+        return () => {
+          for (const dispose of disposers) dispose();
+        };
+      }, 'windows-c-cleanup: locale dicts');
+    }
 
-  const api = new PanelApi(
-    () => ctx.get('connection') as ConnectionLike | undefined,
-    () => activeLocale(),
-  );
+    // 每次都重新取：语言服务可能后到，也可能被卸载；取不到就按浏览器语言自选
+    const translateNow = (): Translate => {
+      const current = ctx.get('locale') as LocaleRuntimeLike | undefined;
+      return current !== undefined && typeof current.bind === 'function'
+        ? current.bind(LOCALE_NS)
+        : makeTranslate(detectLocale());
+    };
+    const localeNow = (): LocaleId => {
+      const current = ctx.get('locale') as LocaleRuntimeLike | undefined;
+      return current === undefined ? detectLocale() : normalizeLocale(current.getLocale?.().active);
+    };
 
-  // conversation.view：additive list 插槽（replaceRisk: none），注册成对话视图环里的一个整页 tab。
-  // locale: 命名空间 → 框架注入 `t`；label 用 thunk → 语言切换时 tab 标题自动跟随。
-  ctx.slots.inject('conversation.view', () =>
-    ctx.slots.register(
-      {
-        name: 'conversation.view',
-        id: 'disk-cleanup',
-        order: 40,
-        label: () => translate('tab'),
-        locale: LOCALE_NS,
-        registrant: 'dsh-windows-c-cleanup',
-      },
-      (props: unknown) => {
-        const seat = (props as { t?: Translate } | undefined)?.t;
-        return createElement(CleanupPanel, { api, ...(seat === undefined ? {} : { t: seat }) });
-      },
-    ),
-  );
+    const api = new PanelApi(
+      () => ctx.get('connection') as ConnectionLike | undefined,
+      () => localeNow(),
+    );
+
+    // conversation.view：additive list 插槽（replaceRisk: none），注册成对话视图环里的一个整页 tab。
+    // locale: 命名空间 → 框架注入 `t` seat；label 用 thunk → 语言切换时 tab 标题自动跟随。
+    ctx.slots.inject('conversation.view', () =>
+      ctx.slots.register(
+        {
+          name: 'conversation.view',
+          id: 'disk-cleanup',
+          order: 40,
+          label: () => translateNow()('tab'),
+          locale: LOCALE_NS,
+          registrant: 'dsh-windows-c-cleanup',
+        },
+        (props: unknown) => {
+          const seat = (props as { t?: Translate } | undefined)?.t;
+          return createElement(CleanupPanel, { api, ...(seat === undefined ? {} : { t: seat }) });
+        },
+      ),
+    );
+  };
+
+  if (typeof ctx.inject === 'function') ctx.inject(['locale'], () => wireUp());
+  else wireUp();
 }
