@@ -445,7 +445,8 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
 
       {state?.trend === undefined ? null : <TrendLine trend={state.trend} t={t} />}
 
-      {/* 三组相邻按钮：①范围+扫描 ②已选+清空 ③删除方式+预演+说明+确认执行 */}
+      {/* 三组相邻按钮：①范围+扫描 → ②已选+清空 → ③删除方式+预演+说明+确认执行
+          组后各有一个向右箭头，标明「先扫描 → 再选择 → 最后执行」的先后关系（纯装饰，读屏会跳过） */}
       <div className="wcc_toolbar">
         <div className="wcc_group">
           <label className="wcc_field">
@@ -458,6 +459,9 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           <button type="button" className="wcc_btn wcc_btn_action" disabled={busy !== ''} onClick={() => void runScan()}>
             {scan === undefined ? t('action.scan') : t('action.rescan')}
           </button>
+          <span className="wcc_arrow" aria-hidden="true">
+            →
+          </span>
         </div>
 
         <div className="wcc_group">
@@ -473,6 +477,9 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
           >
             {t('action.clear')}
           </button>
+          <span className="wcc_arrow" aria-hidden="true">
+            →
+          </span>
         </div>
 
         <div className="wcc_group">

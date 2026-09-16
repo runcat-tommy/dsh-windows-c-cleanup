@@ -247,7 +247,7 @@ function renderToText(node: unknown): string {
   const inner = childNodes.map(renderToText).join('');
   const className = typeof props.className === 'string' ? ` class="${props.className}"` : '';
   // 把无障碍/提示类属性也渲染出来：测试要能断言「问号按钮」的存在与展开状态
-  const extra = ['title', 'aria-expanded', 'aria-label', 'disabled']
+  const extra = ['title', 'aria-expanded', 'aria-label', 'aria-hidden', 'disabled']
     .filter((key) => props[key] !== undefined && (props[key] !== false || key.startsWith('aria-')))
     .map((key) => ` ${key}="${String(props[key])}"`)
     .join('');
@@ -296,6 +296,26 @@ if (typeof component === 'function') {
     '5.15 「预演」旁边有问号说明按钮（点击展开说明）',
     /class="wcc_help"/.test(zhText) && zhText.includes('aria-expanded="false"') && zhText.includes('预演是做什么的？'),
     toolbar.slice(0, 60),
+  );
+
+  // 组后流向箭头：「扫描」与「清空选择」后面各一个，且在「已选」「删除方式」之前
+  const arrows = (zhText.match(/class="wcc_arrow"/g) ?? []).length;
+  const scanAt = zhText.indexOf('扫描 C 盘');
+  const arrow1 = zhText.indexOf('class="wcc_arrow"');
+  const selectedAt = zhText.indexOf('已选');
+  const clearAt = zhText.indexOf('清空选择');
+  const arrow2 = zhText.indexOf('class="wcc_arrow"', arrow1 + 1);
+  const modeAt = zhText.indexOf('删除方式');
+  const arrowShape = (zhText.match(/aria-hidden="true">→</g) ?? []).length;
+  check(
+    '5.16 「扫描」「清空选择」后面各有一个向右箭头（共 2 个，且都对读屏隐藏）',
+    arrows === 2 && arrowShape === 2,
+    `箭头 ${arrows} 个 / 带 aria-hidden 的 → ${arrowShape} 个`,
+  );
+  check(
+    '5.17 箭头位置正确（扫描 → 已选 → 清空 → 删除方式，符合三组流向）',
+    scanAt >= 0 && scanAt < arrow1 && arrow1 < selectedAt && selectedAt < clearAt && clearAt < arrow2 && arrow2 < modeAt,
+    `扫描=${scanAt} 箭头1=${arrow1} 已选=${selectedAt} 清空=${clearAt} 箭头2=${arrow2} 删除方式=${modeAt}`,
   );
 }
 
@@ -420,6 +440,13 @@ console.log('\n--- 7. 按钮与说明 icon 的可辨识度 ---');
     '7.8 「扫描 C 盘」「清空选择」「预演」三个按钮都挂上了显眼样式',
     actionButtons === 3,
     `挂上 ${actionButtons} 个（应为 3）`,
+  );
+  const arrowBlock = cssText.slice(cssText.indexOf('.wcc_arrow{'), cssText.indexOf('.wcc_arrow{') + 260);
+  const arrowMargin = /margin:0 (\d+)px/.exec(arrowBlock);
+  check(
+    '7.9 流向箭头左右留白够大（≥ 8px，叠上组内 gap 更松），且不抢交互',
+    arrowMargin !== null && Number(arrowMargin[1]) >= 8 && /pointer-events:none/.test(arrowBlock),
+    arrowMargin === null ? arrowBlock.slice(0, 80) : `margin 左右 ${arrowMargin[1]}px + 组内 gap 6px`,
   );
   const helpBlock = cssText.slice(cssText.indexOf('.wcc_help{'), cssText.indexOf('.wcc_help_on{'));
   check(

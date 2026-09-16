@@ -89,13 +89,15 @@ The plugin registers a **conversation view tab** in the Web GUI (`conversation.v
 
 The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
 
-The toolbar is laid out as three tight groups, left to right:
+The toolbar is laid out as three tight groups with a right-pointing arrow after the first two, left to right:
 
 | Group | Controls | Purpose |
 | --- | --- | --- |
-| ① Scan | `Scope` select + `Scan C:` | Pick hotspots/full, then scan (shows "Rescan" once a scan exists) |
-| ② Selection | `<n> selected` + `Clear selection` | Live count and one-click reset |
+| ① Scan | `Scope` select + `Scan C:` | Pick hotspots/full, then scan (shows "Rescan" once a scan exists) → |
+| ② Selection | `<n> selected` + `Clear selection` | Live count and one-click reset → |
 | ③ Run | `Delete mode` select + `Preview` + `?` + `Confirm and run` | The `?` help button sits right next to "Preview" |
+
+The arrows are purely decorative (`aria-hidden`, skipped by screen readers) and carry 12px of margin on each side on top of the group's 6px gap, so the flow reads clearly as "scan first → then select → finally run".
 
 **Visual affordance** (deliberately tuned, not the default look):
 

@@ -31,6 +31,13 @@ const PANEL_CSS = `
 .wcc_trend_row{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .wcc_toolbar{display:flex;align-items:center;gap:14px;flex-wrap:wrap}
 .wcc_group{display:flex;align-items:center;gap:6px}
+/*
+ * 组间流向箭头（在「扫描」按钮后与「清空选择」按钮后各一个）：
+ * 纯装饰、aria-hidden，左右留白刻意放大（12px + 组内 gap 6px = 每侧 18px），
+ * 让「先扫描 → 再选择 → 最后执行」的先后关系一眼看清。
+ */
+.wcc_arrow{align-self:center;margin:0 12px;color:var(--dsw-alias-label-secondary,#57606a);
+  font-size:16px;line-height:1;font-weight:600;user-select:none;pointer-events:none}
 .wcc_spacer{flex:1}
 .wcc_help{align-self:center;width:24px;height:24px;padding:0;border-radius:50%;
   border:2px solid var(--dsw-alias-brand-primary,#0969da);
