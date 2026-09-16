@@ -297,8 +297,13 @@ async function main(): Promise<void> {
 
   // ---------- 7. 插件 apply 接线：定时器必须交给 ctx.effect 托管 ----------
   console.log('\n--- 7. apply 接线（假 ctx，验证宿主集成契约）---');
-  let effectCallback: (() => (() => void) | void) | undefined;
-  let effectLabel = '';
+  interface EffectRecord {
+    label: string;
+    callback: () => (() => void) | void;
+  }
+  const effects: EffectRecord[] = [];
+  let panelChannel: string | undefined;
+  let panelAuthority: string | undefined;
   const applyLogs: string[] = [];
   const fakeCtx = {
     tools: { register: () => () => {} },
@@ -309,14 +314,41 @@ async function main(): Promise<void> {
       debug: () => {},
     }),
     effect: (callback: () => (() => void) | void, label?: string) => {
-      effectCallback = callback;
-      effectLabel = label ?? '';
+      effects.push({ label: label ?? '', callback });
       return () => {};
     },
+    inject: (deps: string[], callback: (scope: unknown) => void) => {
+      if (!deps.includes('connection')) throw new Error(`面板请求了非预期服务：${deps.join(',')}`);
+      callback(fakeCtx);
+    },
+    get: (name: string) =>
+      name === 'connection'
+        ? {
+            rpc: {
+              handle: (channel: string, _handler: unknown, options: { authority: string }) => {
+                panelChannel = channel;
+                panelAuthority = options.authority;
+                return () => {};
+              },
+            },
+          }
+        : undefined,
   };
 
   apply(fakeCtx as never, Config({ reportDir: sandbox, historyPath: historyFile, schedule: { enabled: false } }) as never);
-  check('7.1 默认（未启用）时不注册 effect、不建定时器', effectCallback === undefined);
+  check(
+    '7.1 默认（未启用）时不建定时器：没有 scheduled-scan 的 effect',
+    !effects.some((entry) => entry.label.includes('scheduled-scan')),
+    effects.map((entry) => entry.label).join(' | '),
+  );
+  // 面板通道的注册体是 effect 回调（惰性注册），这里显式触发一次观察结果
+  const panelEffect = effects.find((entry) => entry.label.includes('panel rpc'));
+  panelEffect?.callback();
+  check(
+    '7.5 面板 RPC 通道在 apply 阶段注册（与定时开关无关）',
+    panelChannel === '/dsh-c-cleanup' && panelAuthority === 'loopback',
+    `channel=${panelChannel} authority=${panelAuthority}`,
+  );
 
   const enabledConfig = Config({
     reportDir: sandbox,
@@ -324,17 +356,14 @@ async function main(): Promise<void> {
     schedule: { enabled: true, intervalHours: 24, alertFreePercent: 10, initialDelayMinutes: 600, scope: 'hotspots' },
   }) as never;
   apply(fakeCtx as never, enabledConfig);
-  check(
-    '7.2 启用后把定时器的清理交给 ctx.effect（带可读 label）',
-    effectCallback !== undefined && effectLabel.includes('scheduled-scan'),
-    `label=${effectLabel}`,
-  );
+  const scheduled = effects.find((entry) => entry.label.includes('scheduled-scan'));
+  check('7.2 启用后把定时器的清理交给 ctx.effect（带可读 label）', scheduled !== undefined, `labels=${effects.map((entry) => entry.label).join(' | ')}`);
   check(
     '7.3 启动时经 logger 说明配置与历史文件位置',
     applyLogs.some((line) => line.startsWith('info:') && line.includes('定时扫描已启用') && line.includes(historyFile)),
     applyLogs[0]?.slice(0, 80),
   );
-  const cleanups = effectCallback?.();
+  const cleanups = scheduled?.callback();
   let cleanupOk = false;
   try {
     if (typeof cleanups === 'function') cleanups();

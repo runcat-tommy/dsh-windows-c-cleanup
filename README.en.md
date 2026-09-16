@@ -81,6 +81,27 @@ Example prompt:
 
 The tool returns drive info, reclaimable bytes per tier, the biggest top-N consumers, and a migration target suggestion — plus a Markdown report containing: summary → 🟥 biggest consumers → 🟢/🟡/🟠/🔴/🔵 tiers → execution results.
 
+### Cleanup panel (M5)
+
+The plugin registers a **conversation view tab** in the Web GUI (`conversation.view`, an additive `list` slot — it never replaces or destroys any existing surface). Open any session, switch to "磁盘清理", and go from "understand" to "select → preview → execute" without leaving the page.
+
+The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
+
+- Five-tier cards (🟢 safe / 🟡 caution / 🟠 migrate / 🔴 protected) with path, size and the reason for each verdict; protected entries **cannot be selected**;
+- Two-step execution: the "confirm" button unlocks only after a preview, and any change to the selection or mode invalidates that preview; permanent deletion additionally requires an explicit confirmation tick;
+- Real progress from the host's per-item accounting callback (not parsed log text), with a working "cancel job";
+- Migration preview showing source → destination, file count and whether the target volume has room; app config changes are only *suggested*, never applied silently;
+- Trend line at the top: time since the previous scan and which directories grew back.
+
+Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
+
+**What it takes to go live** (platform mechanics, not a plugin choice):
+
+| Change | What you must do |
+| --- | --- |
+| Add/remove a plugin package, or change `dsh.client` fields | **Restart `dsh web`** (package metadata verdicts are cached forever) |
+| Change only the contents of `client/client.js` | **Refresh the page** (bundles are served `no-cache`; HMR is disabled in this profile) |
+
 ## Configuration
 
 Override the row in your profile's `cordis.patch.yml` (a patch **replaces the whole config**, it does not deep-merge):
@@ -148,7 +169,7 @@ Attempts to override a `overridable: false` protected entry are rejected with a 
 - **No link following**: junctions and symlinks are never followed, avoiding double counting and recursion traps.
 - **Reversible migration**: migrations use junctions or app config and are recorded in a ledger (`rollback` from M3).
 
-## Status (M1 + M2 + M3 + M4)
+## Status (M1 + M2 + M3 + M4 + M5)
 
 - [x] Rule library (100+ rules, placeholder-based) + long-term prevention list
 - [x] Scanning: drive info, hotspot list, whole-drive Top-N, junction-safe measurement, time budgets
@@ -158,10 +179,10 @@ Attempts to override a `overridable: false` protected entry are rejected with a 
 - [x] M2 Execution: deletion (batch for the safe tier, per-item for caution), staging area with ledger, UAC elevation (Windows\Temp / WinSxS / DISM / cleanmgr), execution report, dry run by default
 - [x] M3 Migration: junction moves (transparent to applications), JSONL ledger and `rollback`, refusal and rollback on same-volume / existing-destination / insufficient-space / busy-source, app-config suggestions
 - [x] M4 Polish: scan history with trend comparison, machine-readable JSON reports, scheduled scans with alerts (cleanmgr/DISM elevation already shipped in M2)
-- [ ] M5 (phase two) Client GUI panel: five-tier cards, selection, progress and migration preview
+- [x] M5 Client GUI panel: `conversation.view` five-tier cards, selection, two-step execution (preview → confirm), per-item progress with cancel, migration preview
 - [ ] M6 Release: npm + community marketplace (GitHub done)
 
-## Known limitations (M1 + M2 + M3 + M4)
+## Known limitations (M1 + M2 + M3 + M4 + M5)
 
 - **Execution requires explicit authorization**: `apply` / `trash` dry-run by default; a real run should follow a scan the user has reviewed. `migrate` / `rollback` still return `not-implemented` (M3).
 - **Admin-level cleanup depends on the UAC prompt**: DSH's permission stack has no UAC primitive, so the plugin spawns the system prompt via `Start-Process -Verb RunAs` (the script lands in `%TEMP%\dsh-cc-elevated-*.ps1`). If the user declines, `Windows\Temp`, `SoftwareDistribution`, and WinSxS cannot be cleaned and the result is explicitly marked as cancelled.
@@ -169,21 +190,35 @@ Attempts to override a `overridable: false` protected entry are rejected with a 
 - **Whole-drive Top-N coverage is I/O bound**: Node file operations go through the libuv thread pool (4 threads by default) and directory measurement cost is essentially driven by *file count*, so raising concurrency does not help. Within the 70-second budget, the hotspot rules reach 100% coverage on a 153 GB used drive, but the whole-drive Top-N pass covers only part of the tree (in practice it truncates after roughly 160 top/shallow-level directories).
   Truncation is always flagged as `partial` with a reason in both the report and the tool result — never disguised as a complete verdict. Raise `topTreeTimeBudgetMs` for more coverage at the cost of waiting longer. **Actionable findings come from the hotspot rules; Top-N is a safety net**, so truncation does not affect the usability of the five-tier list.
 - **Two released-space metrics**: for small cleanups (tens of MB) the drive free-space delta can read 0 because other processes keep writing to the drive; the per-item measured total is authoritative there, and both are reported side by side.
-- No interactive confirmation UI yet: the model hands the report to the user, and the user's selection feeds the execution path (GUI cards arrive in M4).
+- No interactive confirmation UI yet in the tool path: the model hands the report to the user, and the user's selection feeds the execution path. The M5 panel provides the interactive route (preview → confirm → progress).
+- **Panel availability is a platform matter**: adding/removing a package or changing `dsh.client` requires a `dsh web` restart (metadata verdicts are cached forever); changing only the bundle needs a page refresh (HMR is off in this profile).
+- **The panel shares the tool's judgement but not its configuration surface**: it can scan, preview, execute, migrate and roll back, while settings such as `schedule.enabled` or `reportDir` stay in `cordis.yml` — the panel reports state, it does not persist settings.
+- **Panel jobs live in host memory**: after a host restart the panel shows "job vanished with the host restart" and any running job stops (reports and the migration ledger already on disk are unaffected).
 
 ## Development
 
 ```powershell
 npm install --legacy-peer-deps   # DSH type packages have peer conflicts; local install uses legacy resolution
+npm run deps:link                 # link the host's own @deepseek-ai/* copies (see note below)
 npm run typecheck                 # type check
 npm run smoke                     # fast self-check: rule matching / drive info / budgeted measurement
 npm run m2                        # isolated M2 execution tests (sandboxed under %TEMP%)
 npm run m3                        # isolated M3 migration tests (sandbox + D:\dsh-cc-m3-test)
 npm run m4                        # M4 history/trend/JSON/scheduling semantics (fake scans, seconds; includes one real hotspot scan)
 npm run m4:live                   # M4 scheduled scan end to end (real scan, ~1 minute; history numbers checked against fs.statfs)
+npm run m5                        # M5 panel host half: tiering, preview == execute, real staging area, real migration, cancel, RPC endpoints
+npm run m5:client                 # M5 client bundle contract: replay the browser module load and really render the panel once (offline, seconds)
 npx tsx tests/tool-run.ts full     # headless full scan producing a real report
-npm run build                      # compile to lib/ (publishable artifact)
+npm run build                      # compile to lib/ and bundle client/client.js (publishable artifacts)
+npm run build:client               # re-bundle the client half only (after editing client/src)
 ```
+
+> ⚠️ `@deepseek-ai/dsh-tools` and friends declare their runtime dependencies as **peerDependencies**.
+> `npm install --legacy-peer-deps` therefore never installs them (tests die with
+> `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/dsh-xxx'`), and a plain `npm install`
+> prunes them away again. `npm run deps:link` junctions the host's own copies into `node_modules`,
+> so tests run against exactly the packages the host loads. It is idempotent; re-run it after any install.
+> Always re-verify `npm run build` after touching dependencies.
 
 ## License
 

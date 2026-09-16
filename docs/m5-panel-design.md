@@ -78,9 +78,16 @@ idle ──扫描──▶ scanning ──▶ ready(卡片+趋势)
 - 面板顶部显示 `📈 趋势`（来自 `history.jsonl`）：上次扫描时间、剩余空间变化、长回来的项——这正是用户"清完又长回来"的直觉来源。
 - 定时扫描（`config.schedule.enabled`）在面板上只**显示状态与下次时间**，开关仍走配置：面板不做持久化设置。
 
-## 7. 待平台契约确认后回填
+## 7. 平台契约（已从内置包实证回填）
 
-- 客户端插件的注册机制与插槽选择（`Slots` 清单、注册协议 `single/list/keyed/chain`）。
-- 客户端产物形态（模块格式、React 来源、样式注入方式）与构建步骤。
-- 客户端→宿主 RPC 的包私有通道名称（本文档统一按 `host.call` 语义书写，实际 API 以平台为准）。
-- 是否需要重建 Web 产物、是否需要重启 `dsh web`。
+设计阶段留的四个问题，全部在真实 bundle 与 `dsh-client-modules` 源码里核对过，结论如下（本节即最终事实，不再是待办）：
+
+| 问题 | 实证结论 |
+| --- | --- |
+| 客户端插件的注册机制 | 包声明 `exports["./client"]` + `dsh.client = { platform: "web", inject: [...] }`；单条 `cordis.patch.yml` 行同时携带宿主面与客户端面；宿主在运行期扫 Loader 条目、拼 `window.__DSH_BOOT__`、按 `/plugins/<id>/client.js?rev=<rev>` 提供产物，`id` 即包名 |
+| 插槽选择 | `conversation.view` 是 additive `list`（`replaceRisk: none`），注册项为 `{ name, id, order, label }`；`root`/`sidebar`/`conversation`/`details` 都是 single，注册即摧毁后代席位，已避开 |
+| 产物形态与 React 来源 | classic script，顶层唯一语句是 `window.__ModuleLoader__.load({ id, factory })`；factory 内只有**静态 seed 表**这 10 个说明符可用（`react`、`react/jsx-runtime`、`react-dom`、`react-dom/client`、cordis、`dsh-client-ui-slots`、`dsh-client-web-react`、`dsh-client-ui-primitives`、`dsh-client-ui-attachment`、`dsh-client-schema-form`），其它说明符会当场抛错 → 第三方库必须打进 bundle。本插件只用 `react` 与 `react/jsx-runtime`，两者都 external |
+| 客户端→宿主通道 | 静态包不能用 `host.call` / `harness.handle`（那是动态插件专属）；用 `ctx.connection.rpc.handle(channel, handler, { authority: 'loopback' })` + `connection.rpc.call(channel, endpoint, payload)`，通道名须匹配 `/^\/[A-Za-z0-9._~-]+$/`，返回 `RpcResult`（`'internal'` 码必须带 `details: {}`） |
+| 是否要重建/重启 | 包元数据判定被宿主**永久缓存** → 新增/删除包、改 `dsh.client` 字段必须重启 `dsh web`；只改 bundle 内容刷新页面即可（本 profile 的 HMR 关闭：`dsh-web-app/cordis.patch.yml` 里 `- id: hmr` 带 `disabled: true`），产物以 `no-cache` 提供 |
+
+面板落地后的实测口径：`npm run m5`（宿主面 42 项）与 `npm run m5:client`（客户端产物 17 项，离线重放浏览器加载并真渲染一次首屏）全绿。

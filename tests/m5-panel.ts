@@ -12,6 +12,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import { type Config } from '../src/config.js';
 import { defaultHistoryPath } from '../src/history/index.js';
+import { PANEL_CHANNEL, panelEndpoints, registerPanelRpc } from '../src/panel/rpc.js';
 import {
   disposePanelJobs,
   panelCancel,
@@ -257,6 +258,119 @@ async function main(): Promise<void> {
   const history = await panelHistory(config, { limit: 10 });
   check('7.1 历史返回条目与数据源路径', history.entries.length >= 1 && history.historyPath === config.historyPath, `${history.entries.length} 条`);
   checkLossless('7.2 历史结果是 lossless JSON（无基准时必须省略 trend）', history);
+
+  // ---------- 9. 面板 RPC 端点（浏览器 → 宿主） ----------
+  console.log('\n--- 9. 面板 RPC 端点 ---');
+  const endpoints = panelEndpoints(config);
+  const expectedEndpoints = ['state', 'scan', 'preview', 'migrate-preview', 'execute', 'migrate', 'rollback', 'progress', 'cancel', 'history', 'migrations'];
+  check(
+    '9.1 端点表覆盖 面板需要的全部动作',
+    expectedEndpoints.every((key) => typeof endpoints[key] === 'function'),
+    expectedEndpoints.filter((key) => typeof endpoints[key] !== 'function').join(', ') || '全部存在',
+  );
+  const stateValue = await endpoints.state?.({});
+  checkLossless('9.2 state 端点返回 lossless JSON', stateValue);
+  check(
+    '9.3 progress 端点对不存在的任务如实回报 found:false',
+    JSON.stringify(await endpoints.progress?.({ jobId: 'job-nope' })) === '{"found":false}',
+  );
+
+  interface Captured {
+    channel?: string;
+    options?: { authority?: string };
+    handler?: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<{
+      ok: boolean;
+      value?: unknown;
+      error?: { code?: string; message?: string; details?: unknown };
+    }>;
+  }
+  const captured: Captured = {};
+  const disposers: Array<() => void> = [];
+  let injected: string[] | undefined;
+  let effectLabel = '';
+  const rpcCtx = {
+    inject: (deps: string[], callback: () => void) => {
+      injected = deps;
+      callback();
+    },
+    get: (name: string) =>
+      name === 'connection'
+        ? {
+            rpc: {
+              handle: (
+                channel: string,
+                handler: Captured['handler'],
+                options: { authority: string },
+              ): (() => void) => {
+                captured.channel = channel;
+                captured.handler = handler;
+                captured.options = options;
+                return () => {
+                  disposed++;
+                };
+              },
+            },
+          }
+        : undefined,
+    effect: (callback: () => (() => void) | void, label?: string) => {
+      effectLabel = label ?? '';
+      const disposer = callback();
+      if (typeof disposer === 'function') disposers.push(disposer);
+    },
+  };
+  let disposed = 0;
+  registerPanelRpc(rpcCtx as never, config);
+  check('9.4 用 ctx.inject 软等待 connection（不写进硬依赖）', injected?.join(',') === 'connection', JSON.stringify(injected));
+  check(
+    '9.5 通道名合法且授权级别是本机 loopback',
+    captured.channel === PANEL_CHANNEL && /^\/[A-Za-z0-9._~-]+$/.test(captured.channel ?? '') && captured.options?.authority === 'loopback',
+    `${captured.channel} ｜ ${JSON.stringify(captured.options)}`,
+  );
+  check('9.6 注册随 ctx.effect 托管（卸载即撤路由）', effectLabel.includes('panel rpc') && disposers.length === 1, effectLabel);
+
+  const handler = captured.handler;
+  check('9.7 拿到 RPC handler', typeof handler === 'function');
+  const okReply = await handler?.('progress', { jobId: 'job-nope' }, new AbortController().signal);
+  check(
+    '9.8 成功分支是 RpcResult {ok:true,value}',
+    okReply?.ok === true && JSON.stringify(okReply.value) === '{"found":false}',
+    JSON.stringify(okReply),
+  );
+  const unknownReply = await handler?.('nope', {}, new AbortController().signal);
+  check(
+    '9.9 未知端点返回内部错误而不是抛异常（通道契约：方法不抛业务错误）',
+    unknownReply?.ok === false && unknownReply.error?.code === 'internal' && typeof unknownReply.error.message === 'string' && unknownReply.error.details !== undefined,
+    JSON.stringify(unknownReply),
+  );
+  const thrownReply = await handler?.('migrate-preview', { paths: [null] }, new AbortController().signal);
+  check(
+    '9.10 服务层抛错被折成 {ok:false}（附带可读信息）',
+    thrownReply?.ok === false && (thrownReply.error?.message?.length ?? 0) > 0,
+    JSON.stringify(thrownReply).slice(0, 160),
+  );
+
+  for (const disposer of disposers) disposer();
+  check('9.11 卸载时撤掉通道', disposed === 1, `disposed=${disposed}`);
+
+  // 没有 connection 服务的宿主（CLI）：只警告，不抛错
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (message?: unknown) => warnings.push(String(message));
+  let cliThrew = false;
+  try {
+    registerPanelRpc(
+      {
+        inject: (_deps: string[], callback: () => void) => callback(),
+        get: () => undefined,
+        effect: () => {},
+      } as never,
+      config,
+    );
+  } catch {
+    cliThrew = true;
+  }
+  console.warn = originalWarn;
+  check('9.12 宿主没有 connection 服务时静默降级（工具面不受影响）', cliThrew === false && warnings.some((line) => line.includes('connection')), warnings.join(' | '));
 
   // ---------- 8. 卸载清理 ----------
   console.log('\n--- 8. 卸载与清理 ---');

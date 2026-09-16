@@ -7,10 +7,14 @@
  *
  * M4 新增：`apply` 里按配置启动**定时扫描**（默认关闭）。定时器由 `ctx.effect`
  * 托管，插件卸载即清理；宿主没有定时器服务，因此用 Node 定时器 + `unref()`。
+ *
+ * M5 新增：注册**面板 RPC 通道**（浏览器 → 宿主）。宿主没有 connection 服务时自动跳过。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import { Config } from './config.js';
 import { appendHistory, defaultHistoryPath, toAlertEntry } from './history/index.js';
+import { registerPanelRpc } from './panel/rpc.js';
+import { disposePanelJobs } from './panel/service.js';
 import { createScheduler, describeSchedule } from './scheduler/index.js';
 import { runScheduledScan } from './scheduler/scan.js';
 import { registerDiskCleanupTool } from './tools/disk-cleanup.js';
@@ -27,6 +31,15 @@ type LogLevel = 'info' | 'warn' | 'error';
 
 export function apply(ctx: Context, config: Config): void {
   registerDiskCleanupTool(ctx, config);
+
+  // M5：面板 RPC（浏览器 → 宿主）。与工具共用同一套扫描/安全闸/执行模块。
+  registerPanelRpc(ctx, config);
+  const effectOf = (ctx as unknown as { effect?: (callback: () => () => void, label?: string) => unknown }).effect;
+  if (typeof effectOf === 'function') {
+    effectOf.call(ctx, () => disposePanelJobs, 'windows-c-cleanup:panel-jobs');
+  } else {
+    process.once('exit', disposePanelJobs);
+  }
 
   if (config.schedule?.enabled !== true) return;
 

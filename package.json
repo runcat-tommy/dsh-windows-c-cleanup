@@ -1,6 +1,6 @@
 {
   "name": "dsh-windows-c-cleanup",
-  "version": "0.4.2",
+  "version": "0.5.0",
   "description": "DSH 插件：Windows 系统盘清理能力 —— 扫描 → 五级分级（可安全删除/谨慎删除/建议迁移/保护名单/长期防护）→ 用户确认 → 分层执行与迁移",
   "type": "module",
   "main": "lib/index.js",
@@ -10,10 +10,15 @@
       "types": "./lib/types/index.d.ts",
       "default": "./lib/index.js"
     },
+    "./client": {
+      "default": "./client/client.js"
+    },
     "./package.json": "./package.json"
   },
   "files": [
     "lib",
+    "client/client.js",
+    "client/client.js.map",
     "cordis.patch.yml",
     "src/rules/default-rules.json",
     "README.md",
@@ -22,14 +27,18 @@
     "CHANGELOG.en.md"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "build": "tsc -p tsconfig.json && node client/build.mjs",
+    "build:host": "tsc -p tsconfig.json",
+    "build:client": "node client/build.mjs",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.client.json",
     "smoke": "tsx tests/smoke.ts",
     "m2": "tsx tests/m2-execute.ts",
     "m3": "tsx tests/m3-migrate.ts",
     "m4": "tsx tests/m4-history.ts",
     "m4:live": "tsx tests/m4-live-schedule.ts",
     "m5": "tsx tests/m5-panel.ts",
+    "m5:client": "tsx tests/m5-client-bundle.ts",
+    "deps:link": "node scripts/link-dsh-deps.mjs",
     "scan": "tsx tests/tool-run.ts full",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"
@@ -49,6 +58,13 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-conversation"
+      ]
     }
   },
   "peerDependencies": {
@@ -58,10 +74,19 @@
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "^4.0.2",
-    "@deepseek-ai/dsh-llm": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-tools": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-agent": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-code-runtime": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-invariants": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-llm": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-scope": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-session": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-system-prompt": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-tools": "0.1.0-rc.6",
+    "@deepseek-ai/dsh-user-approval": "0.1.0-rc.6",
     "@deepseek-ai/schemastery": "^3.18.2",
     "@types/node": "^22.10.0",
+    "@types/react": "^18.3.31",
+    "react": "^18.3.1",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

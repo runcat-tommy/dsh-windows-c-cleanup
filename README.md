@@ -168,6 +168,27 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 - 宿主只提供 `ctx.logger` / `ctx.effect`，**没有定时器服务**，所以用 Node 定时器 + `unref()` + `ctx.effect` 托管释放；
 - **四道保护**：单飞（上一轮没跑完就跳过本轮）、首次延迟 1 分钟（避开启动抢 I/O）、整轮 try/catch（失败只记日志）、`unref()`（不阻止宿主退出）。
 
+### 清理面板（M5）
+
+插件在 Web GUI 里注册一个**对话视图 tab**（`conversation.view`，additive list 插槽，不覆盖任何现有界面）：打开任意会话，切到「磁盘清理」就能完成「看懂 → 勾选 → 预演 → 执行」。
+
+面板是**薄的**：它不做任何业务判断，分级、安全闸、测量、释放量核算全部复用宿主侧既有模块；面板调用的「预演」和「真执行」走的是**同一个 `executeCleanup`**（只有 `dryRun` 不同），所以预演里出现的每一项、每个理由都与真执行一致。
+
+- 五级卡片：🟢安全 / 🟡谨慎 / 🟠可迁移 / 🔴保护，逐项显示路径、大小、判定理由；保护层**不可勾选**；
+- 两步执行：必须先「预演」看到逐项动作，按钮才可点「确认执行」；勾选或模式一变，预演即失效需要重跑；
+- 真实进度：进度条来自宿主的**逐项记账回调**（不是猜日志文本），随时可「取消任务」；
+- 迁移预览：先看「源 → 目标」映射、文件数、目标盘是否够，再决定是否迁移；需要你改的应用配置只提示、不代改；
+- 趋势：面板顶部直接显示上次扫描的时间差与「长回来的目录」。
+
+浏览器与宿主之间走 Connection 的通用 RPC 通道 `/dsh-c-cleanup`（`authority: loopback`，只接受本机调用），端点包括 `state` / `scan` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` 等。任务表是宿主内存态，宿主重启即清空。
+
+**落地条件**（平台机制决定，不是本插件的选择）：
+
+| 改动 | 需要做什么 |
+| --- | --- |
+| 新增/删除插件包、改 `dsh.client` 字段 | **重启 `dsh web`**（包元数据判定被宿主永久缓存） |
+| 只改 `client/client.js` 内容 | **刷新页面**即可（bundle 带 `no-cache`；本 profile 的 HMR 是关闭的） |
+
 ## 配置
 
 在 profile 的 `cordis.patch.yml` 中覆盖（patch 会**整体替换**该行 config，不做深合并）：
@@ -275,10 +296,10 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 - [x] M2 执行层：删除（安全层批量 / 谨慎层逐项）、暂存区与台账、UAC 提权（Windows\Temp / WinSxS / DISM / cleanmgr）、执行报告与 dryRun 默认
 - [x] M3 迁移层：目录联接迁移（应用无感）、迁移台账与 `rollback`、对同盘/同名冲突/空间不足/源被占用的拒绝与回滚、app-config 建议命令
 - [x] M4 打磨：扫描历史与趋势对比、JSON 报告、定时扫描与告警（cleanmgr/DISM 提权已在 M2 落地）
-- [ ] M5（二期）Client GUI 面板：五级分区卡片、勾选执行、进度与迁移预览
+- [x] M5 Client GUI 面板：`conversation.view` 五级卡片、勾选、两步执行（预演 → 确认）、逐项进度与取消、迁移预览
 - [ ] M6 发布：npm + 社区插件市场（GitHub 已完成）
 
-## 已知限制（M1 + M2 + M3 + M4）
+## 已知限制（M1 + M2 + M3 + M4 + M5）
 
 - **执行需要明确授权**：`apply` / `trash` 默认预演；真正的执行路径必须先跑扫描并把报告交给用户确认。`migrate` / `rollback` 仍是 `not-implemented`（M3）。
 - **管理员级清理依赖 UAC 弹窗**：DSH 的权限栈没有 UAC 原语，插件通过 `Start-Process -Verb RunAs` 触发系统弹窗（脚本落在 `%TEMP%\dsh-cc-elevated-*.ps1`）；用户不点「是」就无法清理 `Windows\Temp`、`SoftwareDistribution`、WinSxS 等，此时结果里会明确标记为「用户取消」。
@@ -292,23 +313,38 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 - **定时扫描默认关闭且不做系统级唤醒**：依赖宿主进程存活（DSH 没跑就不会扫）；需要开机级定时请用 Windows 任务计划调用 `dsh` 或本插件的 `action=scan`。
 - **趋势不跨机器迁移**：历史文件是本机的，换机或删掉历史后第一次扫描没有对比基准（不会报错，只是不显示趋势）。
 - 尚未提供交互式确认界面：目前由模型把报告交给用户，用户选定范围后再进入执行链路（M4 提供 GUI 卡片）。
+- **面板的落地条件由平台决定**：新增/删除插件包或改 `dsh.client` 字段必须重启 `dsh web`（包元数据判定被永久缓存）；只改 bundle 内容刷新页面即可（本 profile 的 HMR 关闭）。
+- **面板与工具共用同一套判断，但入口不同**：面板只能做「扫描 / 预演 / 执行 / 迁移 / 回滚」这些已在工具里实现的动作，配置类改动（如定时扫描开关、`reportDir`）仍走 `cordis.yml`，面板只显示状态、不做持久化设置。
+- **面板任务表在内存里**：宿主重启后面板会显示「任务已随宿主重启消失」，正在跑的任务随之中止（已落盘的报告与台账不受影响）。
 
 ## 开发
 
 ```powershell
 npm install --legacy-peer-deps   # DSH 类型包 peer 冲突，本地用 legacy 解析
+npm run deps:link                # 把宿主自己的 @deepseek-ai/* 链接进 node_modules（见下方说明）
 npm run typecheck                # 类型检查
 npm run smoke                    # 快速自检：规则匹配 / 盘信息 / 限时测量
 npm run m2                       # M2 执行层隔离用例（真实删除只发生在 %TEMP% 沙箱）
 npm run m3                       # M3 迁移层隔离用例（真实迁移只发生在 %TEMP% 沙箱 + D:\dsh-cc-m3-test）
 npm run m4                       # M4 历史/趋势/JSON/调度语义（假扫描，秒级；含一次真实热点扫描）
 npm run m4:live                  # M4 定时扫描端到端（真扫盘，约 1 分钟；历史数字与 fs.statfs 实测对比）
+npm run m5                       # M5 面板宿主侧：分级/预演=执行同一条路/真暂存区/真迁移/取消/RPC 端点（含一次真实热点扫描）
+npm run m5:client                # M5 客户端 bundle 契约：重放浏览器的模块加载并真渲染一次面板（离线，秒级）
 npx tsx tests/tool-run.ts full    # 无头跑完整扫描，产出真实报告
-npm run build                     # 编译到 lib/（发布物）
+npm run build                     # 编译到 lib/ 并打包 client/client.js（发布物）
+npm run build:client              # 只重新打包客户端 bundle（改了 client/src 之后）
 ```
 
 > ⚠️ 不要用 PowerShell 的 `Get-Content`/`Set-Content` 管道改写本仓库的 UTF-8 文本文件
 > （默认编码会把中文写成乱码并使 `package.json` 变成非法 JSON）；请用编辑工具直接改。
+>
+> ⚠️ 不要跑不带 `--legacy-peer-deps` 的 `npm install`：它会按 peer 解析 prune 掉
+> `@deepseek-ai/dsh-tools` / `dsh-llm` 等提供类型的包，导致 `npm run build` 报 implicit any。装完请复验 `npm run build`。
+>
+> ⚠️ `@deepseek-ai/dsh-tools` 一族把自己的运行时依赖声明成 **peerDependencies**，所以
+> `--legacy-peer-deps` 永远不会装它们（测试会以 `ERR_MODULE_NOT_FOUND: Cannot find package '@deepseek-ai/dsh-xxx'` 崩掉），
+> 而普通 `npm install` 又会把它们 prune 掉。`npm run deps:link` 用目录联接把**宿主自己那份**副本挂进
+> `node_modules`，于是测试跑的就是宿主真实加载的包，且与宿主版本严格一致。该命令幂等，装完依赖重跑一次即可。
 
 ## 许可
 

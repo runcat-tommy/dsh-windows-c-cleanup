@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.5.0] — M5: Web GUI cleanup panel
+
+### Added
+
+- **Client half**: the package declares `exports["./client"]` plus `dsh.client = { platform: "web" }`, and `client/client.js` is bundled by esbuild into a classic script whose only top-level statement is `window.__ModuleLoader__.load({ id: <package name>, factory })` (the `id` must equal the package name). React comes from the shell's module-table seed, so `react` / `react/jsx-runtime` stay external — bundling them would create two React copies and break hooks.
+- **The panel lives in `conversation.view`**, an additive `list` slot (`replaceRisk: none`), so it adds a tab to the conversation view ring instead of replacing or destroying anything. Slots such as `root` / `sidebar` / `conversation` / `details` are single-occupant and would destroy descendant seats, so they are deliberately avoided.
+  - Five-tier cards (🟢 / 🟡 / 🟠 / 🔴 plus 🔵 long-term protections) showing path, size and the reason for each verdict; protected entries cannot be selected;
+  - **Two-step execution**: the confirm button unlocks only after a preview, any change to the selection or mode invalidates that preview, and permanent deletion needs an extra confirmation tick;
+  - Real progress (bar plus per-item state) with a working "cancel job"; the migration preview shows source → destination, file count and whether the target volume has room; the header carries the historical trend and which directories grew back.
+- **Host-side panel service** `src/panel/service.ts`: scan, preview, execute, migrate, roll back, progress, cancel, history, ledger. **Preview and the real run call the same `executeCleanup`** (only `dryRun` differs), so the GUI and tool paths cannot diverge. Jobs live in host memory (cleared on restart) and are capped at 20, with `disposePanelJobs()` releasing them on unload.
+- **Panel-private RPC** `src/panel/rpc.ts`: the generic Connection channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) returning strict `RpcResult` values — business failures become `{ok:false,error:{code:'internal',…}}` and never throw. `ctx.inject(['connection'])` waits softly, and on a CLI host without that service the plugin only logs a line while the tool surface keeps working.
+
+### Changed
+
+- **The executor gained an `onItem` callback**: every result that lands in the table is reported once (including re-reported entries after elevation rewriting), so the panel's per-item progress comes from real accounting rather than parsed log text.
+
+### Tests
+
+- `npm run m5` (42 checks): tiering, protected targets refused at preview time, preview == execute path, real staging-area deletion, real migration with ledger, cancel semantics, lossless JSON for every payload, the RPC endpoint table and `RpcResult` shapes, and graceful degradation on a host without `connection`.
+- `npm run m5:client` (17 checks, offline): replays the browser module load (`__ModuleLoader__.load` → factory materialization), verifying that the registration key equals the package name, that only seed-table members are `require`d, that `apply`/`inject` are exported, that the panel registers into `conversation.view`, and that it really renders once using a minimal React stand-in.
+
 ## [0.4.2] — drive-root concatenation fixed structurally, plus a report-directory field correction
 
 ### Fixed

@@ -1,5 +1,26 @@
 # 更新日志
 
+## [0.5.0] — M5：Web GUI 清理面板
+
+### 新增
+
+- **客户端半边**：包声明 `exports["./client"]` + `dsh.client = { platform: "web" }`，`client/client.js` 由 esbuild 打成 classic script（顶层只有 `window.__ModuleLoader__.load({ id: 包名, factory })`，`id` 必须等于包名）。React 走 shell 模块表的 seed（`react` / `react/jsx-runtime` 一律 external，打进 bundle 会出现两份 React 让 hooks 失效）。
+- **面板挂在 `conversation.view`**：这是 additive list 插槽（`replaceRisk: none`），所以是「对话视图环里多一个 tab」，不覆盖也不摧毁任何现有界面（`root`/`sidebar`/`conversation`/`details` 都是 single，注册即摧毁后代席位的插槽，已避开）。
+  - 五级卡片（🟢/🟡/🟠/🔴 + 🔵长期防护），逐项显示路径、大小、判定理由；保护层不可勾选；
+  - **两步执行**：先预演看逐项动作，才允许「确认执行」；勾选或模式一变预演即作废需重跑；永久删除还要额外勾确认框；
+  - 真实进度（进度条 + 逐项状态）与「取消任务」；迁移预览展示「源 → 目标」映射、文件数、目标盘是否够；顶部显示历史趋势与「长回来的目录」。
+- **宿主侧面板服务** `src/panel/service.ts`：扫描、预演、执行、迁移、回滚、进度、取消、历史、台账。**预演与真执行走同一个 `executeCleanup`（只有 dryRun 不同）**，所以 GUI 与工具两条路径不可能出现行为差异；任务表在内存里（宿主重启即清空），上限 20 条由 `disposePanelJobs()` 在卸载时清理。
+- **面板私有 RPC** `src/panel/rpc.ts`：走 Connection 的通用逻辑通道 `/dsh-c-cleanup`（`authority: loopback`，只接受本机），返回严格的 `RpcResult`（业务错误折成 `{ok:false,error:{code:'internal',…}}`，绝不 throw）；`ctx.inject(['connection'])` 软等待，CLI 宿主没有该服务时只记一条日志、工具面照常可用。
+
+### 变更
+
+- **执行器新增 `onItem` 回调**：每有一条结果落表就回报一次（含提权改写后的补报），面板的逐项进度来自真实记账而不是解析日志文本。
+
+### 测试
+
+- `npm run m5`（42 项）：五级分组、保护项在预演阶段即被拒、预演与执行同路、真暂存区删除、真迁移并写台账、取消语义、每个载荷的 lossless JSON、RPC 端点表与 `RpcResult` 形状、无 `connection` 宿主下的降级。
+- `npm run m5:client`（17 项，离线）：重放浏览器的模块加载（`__ModuleLoader__.load` → 物化 factory），校验注册键等于包名、只 require seed 表成员、导出 `apply`/`inject`、注册进 `conversation.view`，并用最小 React 替身真渲染一次首屏。
+
 ## [0.4.2] — 盘符拼接归一化（一类 bug 的根治）+ 报告目录字段修正
 
 ### 修正

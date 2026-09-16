@@ -1,6 +1,9 @@
 # 依赖与构建产物（lib/ 由 npm run build 生成，不入库）
 node_modules/
 lib/
+# 客户端 bundle 同样是构建产物（client/src 与 client/build.mjs 才是源码）
+client/client.js
+client/client.js.map
 *.tgz
 
 # 本机 lockfile 会记录绝对路径（含用户名），不入库
