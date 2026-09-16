@@ -38,6 +38,7 @@
     "m4:live": "tsx tests/m4-live-schedule.ts",
     "m5": "tsx tests/m5-panel.ts",
     "m5:client": "tsx tests/m5-client-bundle.ts",
+    "m5:live": "tsx tests/m5-live-panel.ts",
     "deps:link": "node scripts/link-dsh-deps.mjs",
     "scan": "tsx tests/tool-run.ts full",
     "prepare": "npm run build",

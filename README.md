@@ -330,6 +330,7 @@ npm run m4                       # M4 历史/趋势/JSON/调度语义（假扫�
 npm run m4:live                  # M4 定时扫描端到端（真扫盘，约 1 分钟；历史数字与 fs.statfs 实测对比）
 npm run m5                       # M5 面板宿主侧：分级/预演=执行同一条路/真暂存区/真迁移/取消/RPC 端点（含一次真实热点扫描）
 npm run m5:client                # M5 客户端 bundle 契约：重放浏览器的模块加载并真渲染一次面板（离线，秒级）
+npm run m5:live                  # M5 活体验证：直接问运行中的 dsh web 要 boot manifest 与产物（含与本地构建的哈希比对）
 npx tsx tests/tool-run.ts full    # 无头跑完整扫描，产出真实报告
 npm run build                     # 编译到 lib/ 并打包 client/client.js（发布物）
 npm run build:client              # 只重新打包客户端 bundle（改了 client/src 之后）

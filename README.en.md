@@ -208,6 +208,7 @@ npm run m4                        # M4 history/trend/JSON/scheduling semantics (
 npm run m4:live                   # M4 scheduled scan end to end (real scan, ~1 minute; history numbers checked against fs.statfs)
 npm run m5                        # M5 panel host half: tiering, preview == execute, real staging area, real migration, cancel, RPC endpoints
 npm run m5:client                 # M5 client bundle contract: replay the browser module load and really render the panel once (offline, seconds)
+npm run m5:live                   # M5 live check: ask the running dsh web for its boot manifest and the served bundle (hash-compared with the local build)
 npx tsx tests/tool-run.ts full     # headless full scan producing a real report
 npm run build                      # compile to lib/ and bundle client/client.js (publishable artifacts)
 npm run build:client               # re-bundle the client half only (after editing client/src)
