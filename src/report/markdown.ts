@@ -4,6 +4,7 @@
  */
 import type { ClassifiedItem, Plan } from '../rules/schema.js';
 import { GRADE_LABEL } from '../rules/schema.js';
+import type { Trend } from '../history/index.js';
 import { formatBytes, formatGB, formatPercent, shortPath } from '../util/format.js';
 
 function tableRow(cells: string[]): string {
@@ -28,6 +29,73 @@ export interface RenderOptions {
   /** 是否渲染「执行结果」占位区块（M1 为只读，默认 true） */
   includeResults?: boolean;
   reportPath?: string;
+  /** 与上一次扫描的对比（M4 历史趋势） */
+  trend?: Trend;
+  /** 最近告警（M4 定时扫描产出） */
+  alerts?: string[];
+  /** 历史文件位置 */
+  historyPath?: string;
+  /** 定时扫描状态描述 */
+  scheduler?: string;
+}
+
+/** 📈 历史趋势区块：回答「谁在长回来、上一轮清理有没有用」 */
+function trendSection(trend: Trend): string[] {
+  const lines: string[] = [];
+  lines.push('## 📈 历史趋势（与上一次扫描对比）');
+  lines.push('');
+  lines.push(
+    `- 上一次扫描：\`${trend.previousAt.slice(0, 16).replace('T', ' ')}\`（约 ${trend.hoursAgo} 小时前）`,
+  );
+  lines.push(
+    `- 剩余空间变化：**${trend.freeDeltaBytes >= 0 ? '+' : '−'}${formatBytes(Math.abs(trend.freeDeltaBytes))}**` +
+      `（已用 ${trend.usedDeltaBytes >= 0 ? '+' : '−'}${formatBytes(Math.abs(trend.usedDeltaBytes))}）`,
+  );
+  lines.push('');
+  if (trend.grown.length > 0) {
+    lines.push('**长回来的（>100 MB）**：');
+    lines.push('');
+    lines.push(tableRow(['路径', '当前大小', '增长']));
+    lines.push(tableRow(['---', '---', '---']));
+    for (const item of trend.grown) {
+      lines.push(tableRow([shortPath(item.path), formatBytes(item.sizeBytes), `+${formatBytes(item.deltaBytes)}`]));
+    }
+    lines.push('');
+  }
+  if (trend.shrunk.length > 0) {
+    lines.push('**被释放的（>100 MB）**：');
+    lines.push('');
+    lines.push(tableRow(['路径', '当前大小', '减少']));
+    lines.push(tableRow(['---', '---', '---']));
+    for (const item of trend.shrunk) {
+      lines.push(tableRow([shortPath(item.path), formatBytes(item.sizeBytes), `−${formatBytes(-item.deltaBytes)}`]));
+    }
+    lines.push('');
+  }
+  if (trend.appeared.length > 0) {
+    lines.push(
+      `**新出现的大头**：${trend.appeared.map((item) => `${shortPath(item.path, 48)}（${formatBytes(item.sizeBytes)}）`).join('、')}`,
+    );
+    lines.push('');
+  }
+  if (trend.disappeared.length > 0) {
+    lines.push(
+      `**本次未再测到的大头**：${trend.disappeared
+        .map((item) => shortPath(item.path, 48))
+        .join('、')}${trend.previousPartial ? '（上次扫描被截断，此项结论不可靠）' : ''}`,
+    );
+    lines.push('');
+  }
+  if (
+    trend.grown.length === 0 &&
+    trend.shrunk.length === 0 &&
+    trend.appeared.length === 0 &&
+    trend.disappeared.length === 0
+  ) {
+    lines.push('_与上一次相比没有超过 100 MB 的显著变化。_');
+    lines.push('');
+  }
+  return lines;
 }
 
 export function renderReport(plan: Plan, options: RenderOptions = {}): string {
@@ -65,6 +133,15 @@ export function renderReport(plan: Plan, options: RenderOptions = {}): string {
     lines.push(`> ⚠️ 本次扫描未完全跑完（${plan.scanStats.partialReasons.join('；')}），列表可能不完整。`);
   }
   lines.push('');
+
+  if (options.alerts && options.alerts.length > 0) {
+    lines.push('## 🔔 空间告警');
+    lines.push('');
+    for (const alert of options.alerts) lines.push(`- ${alert}`);
+    lines.push('');
+  }
+
+  if (options.trend) lines.push(...trendSection(options.trend));
 
   lines.push(`## 🟥 大头占用（Top ${plan.bigItems.length}，按大小降序）`);
   lines.push('');
@@ -137,7 +214,9 @@ export function renderReport(plan: Plan, options: RenderOptions = {}): string {
   if (options.includeResults !== false) {
     lines.push('## 执行结果');
     lines.push('');
-    lines.push('_本报告由 M1（只读扫描）生成，尚未执行任何清理动作。执行后此处会记录每项的前后空间变化与跳过原因。_');
+    lines.push(
+      '_本报告只描述「现状与建议」，**扫描本身不删除任何文件**。执行请调用 `disk_cleanup` 的 `apply` / `trash`（默认 dryRun，用户确认后传 `dryRun: false`）或 `migrate` / `rollback`；每次执行都会另外生成一份《C盘清理执行报告》。_',
+    );
     lines.push('');
   }
 
@@ -156,6 +235,8 @@ export function renderReport(plan: Plan, options: RenderOptions = {}): string {
     } 个目录${plan.scanStats.topTreePartial ? '（超时截断）' : ''} ｜ 分级候选项 ${plan.scanStats.hotspotCount + plan.scanStats.topTreeDirs} 项`,
   );
   if (options.reportPath) lines.push(`报告文件：\`${options.reportPath}\``);
+  if (options.historyPath) lines.push(`历史记录：\`${options.historyPath}\`（每次扫描追加一条，用于趋势对比）`);
+  if (options.scheduler) lines.push(`定时扫描：${options.scheduler}`);
 
   return lines.join('\n');
 }

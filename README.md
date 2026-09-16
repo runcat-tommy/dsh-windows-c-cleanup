@@ -59,6 +59,7 @@ dsh web --patch .\dev.cordis.yml
 | `action` | `scan` \| `plan` \| `apply` \| `migrate` \| `rollback` \| `trash` | 必填。`scan`/`plan` 只读；`apply`/`trash` 执行清理（M2）；`migrate`/`rollback` 迁移与回滚（M3） |
 | `scope` | `hotspots` \| `full` | `hotspots` 只按规则库测热点（快）；`full` 追加全盘 Top-N 大目录（默认） |
 | `reportPath` | 路径 | 报告落盘位置，缺省 `工作目录/C盘清理报告-<时间戳>.md` |
+| `format` | `markdown` \| `json` \| `both` | 报告格式，缺省取配置 `defaultReportFormat`；`json` 产出机器可读报告（传 `x.md` 时会同时写同名 `x.json`） |
 | `items` | 路径数组 | 要清理的具体路径（**谨慎层必填**：只接受用户逐项确认过的路径） |
 | `grade` | `safe` \| `caution` \| `migrate` | 按层级选范围：`safe` 可批量；`caution` 必须同时给出 `items`；`migrate` 配合 `action=migrate` 自动挑选迁移层 |
 | `mode` | `permanent` \| `trash` | 删除模式：`trash` 移到其他盘暂存区（可恢复，**默认**）；`permanent` 永久删除 |
@@ -132,6 +133,41 @@ dsh web --patch .\dev.cordis.yml
 
 `app-config` 类规则（如 npm 缓存）除搬数据外，还会返回建议命令（例如 `npm config set cache "D:\..."`），但**不自动修改应用配置**。目录联接在 Windows 上不需要管理员权限。
 
+### 历史趋势与 JSON 报告（M4）
+
+删掉的缓存会长回来——本机实测一轮清理后约 11 GB 被应用自己重建（企业微信升级 1.93 GB、`%TEMP%` 1.47 GB、WPS 插件 1.97 GB、Chrome ~0.8 GB、uv 327 MB）。所以每次扫描都会往 `<DSH_HOME>\windows-c-cleanup\history.jsonl` 追加一条记录，并与上一次对比：
+
+```
+📈 与上一次扫描（24 小时前）：剩余空间 −1.20 GB ｜ 长回来 3 项 ｜ 被释放 1 项 ｜ 增长最多：…\WXWork\upgrade +1.93 GB
+```
+
+Markdown 报告里渲染成「📈 历史趋势」区块（长回来的 / 被释放的 / 新出现的 / 本次未再测到的）；机器可读版本用 `format`：
+
+```jsonc
+{ "action": "scan", "format": "both" }   // → C盘清理报告-<时间戳>.md + 同名 .json
+```
+
+JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级分组、大头、趋势与告警，可直接喂给 GUI / 脚本 / 监控。**趋势只在路径交集上比较**：扫描被时间预算截断时，「上次有、这次没有」不等于「已被清理」，报告里用 `previousPartial` 标注。
+
+### 定时扫描与告警（M4）
+
+默认**关闭**——后台扫盘会占用你的磁盘 I/O，属于需要你点头的行为。打开后：
+
+```yaml
+- id: windows-c-cleanup
+  name: dsh-windows-c-cleanup
+  config:
+    schedule:
+      enabled: true
+      intervalHours: 24
+      alertFreePercent: 10
+      scope: hotspots
+```
+
+- 低于 `alertFreePercent` 时写一条告警记录（下次扫描的工具输出 / 报告顶部会显示），并经 `ctx.logger` 输出 `warn` 日志；
+- 宿主只提供 `ctx.logger` / `ctx.effect`，**没有定时器服务**，所以用 Node 定时器 + `unref()` + `ctx.effect` 托管释放；
+- **四道保护**：单飞（上一轮没跑完就跳过本轮）、首次延迟 1 分钟（避开启动抢 I/O）、整轮 try/catch（失败只记日志）、`unref()`（不阻止宿主退出）。
+
 ## 配置
 
 在 profile 的 `cordis.patch.yml` 中覆盖（patch 会**整体替换**该行 config，不做深合并）：
@@ -151,6 +187,14 @@ dsh web --patch .\dev.cordis.yml
     defaultDeleteMode: trash
     trashPath: 'D:\to_delete'
     migrationRoot: 'D:\dsh-cc-migrated'
+    historyPath: 'C:\Users\<你>\.dsh\windows-c-cleanup\history.jsonl'
+    defaultReportFormat: markdown
+    schedule:
+      enabled: true          # 默认 false：不主动占用你的磁盘 I/O
+      intervalHours: 24
+      alertFreePercent: 10
+      initialDelayMinutes: 1
+      scope: hotspots
     extraRulesFile: 'D:\my-rules.json'
 ```
 
@@ -167,6 +211,13 @@ dsh web --patch .\dev.cordis.yml
 | `defaultDeleteMode` | `trash` | 默认删除模式：`trash` 移到其他盘暂存区，`permanent` 直接删除 |
 | `trashPath` | `<空闲最大的非系统盘>:\to_delete` | 暂存区位置（必须与其他盘同盘不同卷才释放空间） |
 | `migrationRoot` | `<空闲最大的非系统盘>:\dsh-cc-migrated` | 迁移根目录；迁移台账 `ledger.jsonl` 与之同目录 |
+| `historyPath` | `<DSH_HOME>\windows-c-cleanup\history.jsonl` | 扫描历史（趋势对比数据源）；故意放在不会被清理的位置 |
+| `defaultReportFormat` | `markdown` | 默认报告格式：`markdown` / `json` / `both` |
+| `schedule.enabled` | `false` | 是否启用定时扫描（**默认关闭**，需你显式同意） |
+| `schedule.intervalHours` | `24` | 定时扫描间隔（小时） |
+| `schedule.alertFreePercent` | `10` | 剩余空间占比低于该值时写告警 |
+| `schedule.initialDelayMinutes` | `1` | 首次执行延迟，避开宿主启动抢 I/O |
+| `schedule.scope` | `hotspots` | 定时扫描范围（比 `full` 快且省 I/O） |
 | `extraRulesFile` | 无 | 用户附加规则文件 |
 
 ## 规则库
@@ -223,11 +274,11 @@ dsh web --patch .\dev.cordis.yml
 - [x] DSH 工具注册（`disk_cleanup`，参数/输出 schema 校验通过）
 - [x] M2 执行层：删除（安全层批量 / 谨慎层逐项）、暂存区与台账、UAC 提权（Windows\Temp / WinSxS / DISM / cleanmgr）、执行报告与 dryRun 默认
 - [x] M3 迁移层：目录联接迁移（应用无感）、迁移台账与 `rollback`、对同盘/同名冲突/空间不足/源被占用的拒绝与回滚、app-config 建议命令
-- [ ] M4 Web GUI：五级分区卡片、勾选、进度、空间变化对比
-- [ ] M5 定时扫描与告警
-- [ ] M6 发布（npm + 社区插件市场）
+- [x] M4 打磨：扫描历史与趋势对比、JSON 报告、定时扫描与告警（cleanmgr/DISM 提权已在 M2 落地）
+- [ ] M5（二期）Client GUI 面板：五级分区卡片、勾选执行、进度与迁移预览
+- [ ] M6 发布：npm + 社区插件市场（GitHub 已完成）
 
-## 已知限制（M1 + M2 + M3）
+## 已知限制（M1 + M2 + M3 + M4）
 
 - **执行需要明确授权**：`apply` / `trash` 默认预演；真正的执行路径必须先跑扫描并把报告交给用户确认。`migrate` / `rollback` 仍是 `not-implemented`（M3）。
 - **管理员级清理依赖 UAC 弹窗**：DSH 的权限栈没有 UAC 原语，插件通过 `Start-Process -Verb RunAs` 触发系统弹窗（脚本落在 `%TEMP%\dsh-cc-elevated-*.ps1`）；用户不点「是」就无法清理 `Windows\Temp`、`SoftwareDistribution`、WinSxS 等，此时结果里会明确标记为「用户取消」。
@@ -237,6 +288,9 @@ dsh web --patch .\dev.cordis.yml
 - **释放量核算的两种口径**：小体量清理（数十 MB 级）时「盘符空闲净增」可能为 0（被其他进程同时写入掩盖），此时以「逐项测量合计」为准，报告里会同时给出并注明。
 - **迁移耗时与被迁移体积成正比**：迁移是「复制 → 校验 → 删源 → 建联接」，数十 GB 的目录会很慢（工具超时上限 15 分钟）；被应用占用的目录会在删源阶段中止并回滚副本。
 - **`app-config` 类迁移不自动改配置**：插件只搬数据（并建立目录联接保证应用仍可用）并给出建议命令；是否让应用改用新路径由用户确认后自己执行，避免静默改坏环境。
+- **扫描可能被时间预算截断**：热点清单与全盘 Top-N 各有 70 秒预算（可配 `hotspotTimeBudgetMs` / `topTreeTimeBudgetMs`），超时即截断并在报告与工具输出里标注，绝不当成「扫全了」。
+- **定时扫描默认关闭且不做系统级唤醒**：依赖宿主进程存活（DSH 没跑就不会扫）；需要开机级定时请用 Windows 任务计划调用 `dsh` 或本插件的 `action=scan`。
+- **趋势不跨机器迁移**：历史文件是本机的，换机或删掉历史后第一次扫描没有对比基准（不会报错，只是不显示趋势）。
 - 尚未提供交互式确认界面：目前由模型把报告交给用户，用户选定范围后再进入执行链路（M4 提供 GUI 卡片）。
 
 ## 开发
@@ -247,6 +301,8 @@ npm run typecheck                # 类型检查
 npm run smoke                    # 快速自检：规则匹配 / 盘信息 / 限时测量
 npm run m2                       # M2 执行层隔离用例（真实删除只发生在 %TEMP% 沙箱）
 npm run m3                       # M3 迁移层隔离用例（真实迁移只发生在 %TEMP% 沙箱 + D:\dsh-cc-m3-test）
+npm run m4                       # M4 历史/趋势/JSON/调度语义（假扫描，秒级；含一次真实热点扫描）
+npm run m4:live                  # M4 定时扫描端到端（真扫盘，约 1 分钟；历史数字与 fs.statfs 实测对比）
 npx tsx tests/tool-run.ts full    # 无头跑完整扫描，产出真实报告
 npm run build                     # 编译到 lib/（发布物）
 ```

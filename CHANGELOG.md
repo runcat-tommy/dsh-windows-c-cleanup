@@ -1,5 +1,31 @@
 # 更新日志
 
+## [0.4.0] — M4：打磨（历史趋势 / JSON 报告 / 定时扫描与告警）
+
+### 新增
+
+- **历史趋势** `src/history/index.ts`：每次扫描追加一条 JSONL 记录到 `<DSH_HOME>/windows-c-cleanup/history.jsonl`，并与上一次扫描对比得出：剩余空间/已用变化、**长回来的目录**（>100 MB）、**被释放的目录**、新出现与未再测到的大头。
+  这一项针对的正是本机实况——一轮清理后约 11 GB 被应用自己重建（企业微信升级 1.93 GB、`%TEMP%` 1.47 GB、WPS 插件 1.97 GB、Chrome ~0.8 GB、uv 327 MB），只删不盯是治不住的。
+- **JSON 报告** `src/report/json.ts`：`format=json|both` 产出带 `schema: dsh-windows-c-cleanup/report@1` 版本号的机器可读报告，供 GUI / 脚本 / 监控消费；Markdown 与 JSON 可同时产出（`reportPath` 指向 `.md` 时，JSON 取同名 `.json`）。
+- **定时扫描与告警** `src/scheduler/`：`config.schedule.enabled=true`（**默认关闭**）后按间隔自动扫描，范围默认 `hotspots`；剩余空间低于 `alertFreePercent`（默认 10%）时写告警记录并经 `ctx.logger` 输出。
+  宿主事实：cordis 只提供 `ctx.logger` / `ctx.effect`，**没有定时器服务**，因此用 Node 定时器 + `unref()` + `ctx.effect` 托管释放。
+- **不伤害宿主的四道保护**：单飞（上一轮未完成则跳过本轮）、首次执行延迟（默认 1 分钟，避开启动抢 I/O）、整轮 try/catch（失败只记日志）、定时器 `unref()`（不阻止进程退出）。
+- **报告与工具输出**：Markdown 报告新增「🔔 空间告警」与「📈 历史趋势」区块；工具输出新增 `historyPath` / `reportJsonPath` / `trend` / `alerts` / `schedule` 字段。
+- **配置**：`historyPath`、`defaultReportFormat`、`schedule.enabled/intervalHours/alertFreePercent/initialDelayMinutes/scope`。
+- **测试**：`npm run m4`（33 项：假扫描覆盖调度语义 + 一次真实热点扫描串联趋势）、`npm run m4:live`（**真扫盘**端到端，把历史里的剩余空间与 `fs.statfs` 实测对比）。
+
+### 修正
+
+- **告警条目被覆盖成扫描条目**：`toAlertEntry` 里 `...input` 写在 `kind: 'alert'` 之后，扫描条目的 `kind: 'scan'` 把告警覆盖回去，导致告警永远筛不出来（测试 3.1/3.3 抓到）。已改为先摊开再覆盖。
+- **历史 id 与方案编号不一致**：历史条目用扫描时间戳当 id，方案用 `plan-<时间戳>`，趋势对比会找不到自己那条记录，从而拿错基准。现在历史 id 直接用 `plan.id`，「方案 / 报告文件名 / 历史记录」三处共用同一身份。
+- **JSON 报告路径双扩展名**：向 `reportPath` 传 `x.json` 时曾产出 `x.json.json`；现在按 `.md` / `.json` / 其他三种情况分别处理。
+
+### 已知限制
+
+- **定时扫描默认关闭**：它会在后台占用磁盘 I/O，属于需要用户显式同意的行为。
+- **趋势按路径交集比较**：扫描被截断时「上次有、这次没有」≠「已被清理」，报告会注明 `previousPartial`。
+- **历史文件固定在 `<DSH_HOME>`**：不放在会被清理的缓存目录里，避免历史被自己删掉。
+
 ## [0.3.0] — M3：迁移层（目录联接 / 台账 / 回滚）
 
 ### 新增

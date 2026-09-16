@@ -24,6 +24,17 @@ import { executeCleanup } from '../executor/index.js';
 import type { ExecutedItem, ExecuteReport } from '../executor/index.js';
 import { guardTargets } from '../executor/safety.js';
 import {
+  appendHistory,
+  computeTrend,
+  defaultHistoryPath,
+  historyEntryFromPlan,
+  previousScan,
+  readHistory,
+  recentAlerts,
+} from '../history/index.js';
+import { renderJsonReport } from '../report/json.js';
+import { describeSchedule } from '../scheduler/index.js';
+import {
   MIGRATION_LEDGER_FILE,
   activeMigrations,
   appendLedger,
@@ -89,6 +100,16 @@ interface ExecutionView {
   items: ExecItemView[];
 }
 
+interface TrendView {
+  previousAt: string;
+  hoursAgo: number;
+  freeDeltaBytes: number;
+  grownCount: number;
+  shrunkCount: number;
+  /** 人类可读的「增长最多」摘要，例如 `~\AppData\...\upgrade +1.93 GB` */
+  topGrowth: string;
+}
+
 interface DiskCleanupOutput {
   action: Action;
   status: 'ok' | 'dry-run' | 'executed' | 'not-implemented';
@@ -115,6 +136,16 @@ interface DiskCleanupOutput {
   migrationTarget: string;
   /** app-config 类迁移规则给出的建议命令（只提示，不自动改配置） */
   migrationAdvice?: string[];
+  /** 扫描历史文件（每次扫描追加一条，用于趋势对比） */
+  historyPath: string;
+  /** JSON 报告路径（format=json / both 时产出） */
+  reportJsonPath?: string;
+  /** 定时扫描状态描述 */
+  schedule?: string;
+  /** 最近的空间告警（由定时扫描写入历史） */
+  alerts?: string[];
+  /** 与上一次扫描的对比（首次扫描时无此字段） */
+  trend?: TrendView;
   execution?: ExecutionView;
   message?: string;
 }
@@ -142,6 +173,7 @@ const baseOutput = (action: Action): DiskCleanupOutput => ({
   bigItems: [],
   drives: [],
   migrationTarget: '',
+  historyPath: '',
 });
 
 const unavailable = (action: Action, message: string): DiskCleanupOutput => ({
@@ -197,6 +229,19 @@ function describeOutput(value: DiskCleanupOutput): string {
     )}（${value.cautionCount} 项）｜ 🟠 可迁移 ${formatBytes(value.migrateBytes)}（${value.migrateCount} 项）`,
   ];
   if (value.migrationTarget) lines.push(`迁移目标盘建议：${value.migrationTarget}`);
+  if (value.alerts && value.alerts.length > 0) {
+    lines.push('', '🔔 空间告警（定时扫描写入）：');
+    for (const alert of value.alerts) lines.push(`  ${alert}`);
+  }
+  if (value.trend) {
+    const sign = value.trend.freeDeltaBytes >= 0 ? '+' : '−';
+    lines.push(
+      '',
+      `📈 与上一次扫描（${value.trend.hoursAgo} 小时前）：剩余空间 ${sign}${formatBytes(
+        Math.abs(value.trend.freeDeltaBytes),
+      )} ｜ 长回来 ${value.trend.grownCount} 项 ｜ 被释放 ${value.trend.shrunkCount} 项 ｜ 增长最多：${value.trend.topGrowth}`,
+    );
+  }
   if (value.bigItems.length > 0) {
     lines.push('', `大头占用（Top ${value.bigItems.length}）`);
     for (const item of value.bigItems) {
@@ -204,6 +249,9 @@ function describeOutput(value: DiskCleanupOutput): string {
     }
   }
   lines.push('', `长期防护措施：${value.longTermCount} 项`, `可视化报告：${value.reportPath}`);
+  if (value.reportJsonPath) lines.push(`JSON 报告：${value.reportJsonPath}`);
+  if (value.historyPath) lines.push(`历史记录：${value.historyPath}（趋势对比数据源）`);
+  if (value.schedule) lines.push(`定时扫描：${value.schedule}`);
   if (value.partial) lines.push('', '⚠️ 扫描超时被截断，列表可能不完整。');
   return lines.join('\n');
 }
@@ -218,7 +266,8 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
         'apply/trash 默认 dryRun=true，只列动作不删文件；正确用法是先 scan、把报告交给用户、拿到用户对具体条目的确认，再用 dryRun:false 执行；谨慎层（caution）必须把用户逐项确认的路径放进 items，不允许按级别批量。' +
         '保护名单是硬约束：用户文档、凭据、虚拟磁盘、聊天数据、IDE 配置、未收录规则库的路径一律拒绝执行，即使用户点名也不删。' +
         '需要管理员权限的项（Windows\\Temp、SoftwareDistribution、WinSxS 的 DISM 清理、cleanmgr）会走 UAC 提权，用户拒绝授权时如实回报而非谎报成功。' +
-        '用户有多个盘时优先建议迁移而不是删除：action=migrate 把目录搬到其他盘并在原位置留下目录联接（应用无感），台账可查、action=rollback 可搬回；迁移同样默认 dryRun，且是「先复制、校验、再删源、最后建联接」，中途失败会回滚副本、不留半迁移状态。',
+        '用户有多个盘时优先建议迁移而不是删除：action=migrate 把目录搬到其他盘并在原位置留下目录联接（应用无感），台账可查、action=rollback 可搬回；迁移同样默认 dryRun，且是「先复制、校验、再删源、最后建联接」，中途失败会回滚副本、不留半迁移状态。' +
+        '每次扫描都会追加一条历史并据此给出与上一次的趋势对比（谁在长回来、上一轮清理有没有用）；format=json 可另出机器可读报告供 GUI/脚本/监控消费。',
       parameters: {
         action: {
           type: 'string',
@@ -269,6 +318,12 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
           description: '迁移目标盘（如 D:）；缺省自动选空闲最大的非系统盘',
         },
         extraRulesFile: { type: 'string', description: '本次扫描使用的附加规则文件路径' },
+        format: {
+          type: 'string',
+          enum: ['markdown', 'json', 'both'],
+          description:
+            '报告格式（M4）：markdown=可视化报告；json=机器可读报告（给 GUI / 脚本 / 监控用）；both=两份都出。缺省取配置 defaultReportFormat',
+        },
       },
       output: {
         schema: {
@@ -323,6 +378,31 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
               },
             },
             migrationTarget: { type: 'string' },
+            historyPath: {
+              type: 'string',
+              required: true,
+              description: '扫描历史文件（每次扫描追加一条，用于趋势对比）',
+            },
+            reportJsonPath: { type: 'string', description: 'JSON 报告路径（format=json / both 时产出）' },
+            schedule: { type: 'string', description: '定时扫描状态描述' },
+            alerts: {
+              type: 'array',
+              description: '最近的空间告警（由定时扫描写入历史）',
+              items: { type: 'string' },
+            },
+            trend: {
+              type: 'object',
+              additionalProperties: false,
+              description: '与上一次扫描的对比（首次扫描时无此字段）',
+              properties: {
+                previousAt: { type: 'string', required: true },
+                hoursAgo: { type: 'number', required: true },
+                freeDeltaBytes: { type: 'number', required: true },
+                grownCount: { type: 'number', required: true },
+                shrunkCount: { type: 'number', required: true },
+                topGrowth: { type: 'string', required: true },
+              },
+            },
             migrationAdvice: {
               type: 'array',
               description: '迁移时给出的建议命令（例如把应用缓存配置指向新路径），仅提示、不自动改配置',
@@ -607,10 +687,58 @@ async function runScan(input: {
     },
   });
 
-  const reportPath =
-    (args.reportPath as string | undefined) ?? path.join(outputDir(config), `C盘清理报告-${nowStamp()}.md`);
-  await fs.mkdir(path.dirname(reportPath), { recursive: true });
-  await fs.writeFile(reportPath, renderReport(plan, { reportPath }), 'utf8');
+  // ── M4：写历史 → 算趋势 → 按格式出报告 ────────────────────────────────
+  const historyPath = config.historyPath ?? defaultHistoryPath();
+  const entry = historyEntryFromPlan(plan, scope, Date.now() - started);
+  await appendHistory(historyPath, entry);
+  const history = await readHistory(historyPath, 200);
+  const previous = previousScan(history, entry.id);
+  const trend = previous ? computeTrend(previous, entry) : undefined;
+  const alerts = recentAlerts(history, 3).map(
+    (alert) => `${alert.at.slice(0, 16).replace('T', ' ')} ${alert.message ?? ''}`.trim(),
+  );
+  const schedule = describeSchedule(config.schedule);
+
+  const format = (args.format as 'markdown' | 'json' | 'both' | undefined) ?? config.defaultReportFormat;
+  const requested = args.reportPath as string | undefined;
+  const defaultBase = path.join(outputDir(config), `C盘清理报告-${nowStamp()}`);
+  // reportPath 指向 .md 时，附带的 JSON 报告换同名的 .json；只出 JSON 时直接用该路径
+  const markdownPath = requested ?? `${defaultBase}.md`;
+  const jsonPath = requested
+    ? requested.toLowerCase().endsWith('.md')
+      ? `${requested.slice(0, -3)}.json`
+      : requested.toLowerCase().endsWith('.json')
+        ? requested
+        : `${requested}.json`
+    : `${defaultBase}.json`;
+
+  let reportPath = '';
+  if (format === 'markdown' || format === 'both') {
+    await fs.mkdir(path.dirname(markdownPath), { recursive: true });
+    await fs.writeFile(
+      markdownPath,
+      renderReport(plan, { reportPath: markdownPath, trend, alerts, historyPath, scheduler: schedule }),
+      'utf8',
+    );
+    reportPath = markdownPath;
+  }
+  let reportJsonPath: string | undefined;
+  if (format === 'json' || format === 'both') {
+    await fs.mkdir(path.dirname(jsonPath), { recursive: true });
+    await fs.writeFile(
+      jsonPath,
+      renderJsonReport(plan, {
+        generatedAt: new Date().toISOString(),
+        trend,
+        alerts,
+        historyPath,
+        scheduler: schedule,
+      }),
+      'utf8',
+    );
+    reportJsonPath = jsonPath;
+    if (!reportPath) reportPath = jsonPath;
+  }
 
   const aboveThreshold = plan.bigItems.filter((item) => item.sizeBytes >= config.bigItemThresholdBytes);
   const bigItems = (aboveThreshold.length > 0 ? aboveThreshold : plan.bigItems.slice(0, 12)).map<BigItemView>(
@@ -622,6 +750,23 @@ async function runScan(input: {
     status: 'ok',
     planId: plan.id,
     reportPath,
+    reportJsonPath,
+    historyPath,
+    schedule,
+    alerts,
+    trend: trend
+      ? {
+          previousAt: trend.previousAt,
+          hoursAgo: trend.hoursAgo,
+          freeDeltaBytes: trend.freeDeltaBytes,
+          grownCount: trend.grown.length,
+          shrunkCount: trend.shrunk.length,
+          topGrowth:
+            trend.grown.length > 0
+              ? `${shortPath(trend.grown[0].path, 48)} +${formatBytes(trend.grown[0].deltaBytes)}`
+              : '无显著增长',
+        }
+      : undefined,
     scannedAt: plan.createdAt,
     durationMs: Date.now() - started,
     partial: plan.partial,

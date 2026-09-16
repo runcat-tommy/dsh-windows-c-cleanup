@@ -1,6 +1,6 @@
 {
   "name": "dsh-windows-c-cleanup",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "DSH 插件：Windows 系统盘清理能力 —— 扫描 → 五级分级（可安全删除/谨慎删除/建议迁移/保护名单/长期防护）→ 用户确认 → 分层执行与迁移",
   "type": "module",
   "main": "lib/index.js",
@@ -27,6 +27,8 @@
     "smoke": "tsx tests/smoke.ts",
     "m2": "tsx tests/m2-execute.ts",
     "m3": "tsx tests/m3-migrate.ts",
+    "m4": "tsx tests/m4-history.ts",
+    "m4:live": "tsx tests/m4-live-schedule.ts",
     "scan": "tsx tests/tool-run.ts full",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"

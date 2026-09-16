@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.4.0] — M4: polish (history trend / JSON report / scheduled scans and alerts)
+
+### Added
+
+- **History trend** `src/history/index.ts`: every scan appends one JSONL record to `<DSH_HOME>/windows-c-cleanup/history.jsonl` and is compared against the previous scan — free/used delta, **directories that grew back** (>100 MB), directories that were released, and big items that appeared or were no longer measured. This targets what was measured on this machine: ~11 GB grew back after one cleanup round (WXWork upgrade 1.93 GB, `%TEMP%` 1.47 GB, WPS add-ons 1.97 GB, Chrome ~0.8 GB, uv 327 MB).
+- **JSON report** `src/report/json.ts`: `format=json|both` writes a machine-readable report versioned as `schema: dsh-windows-c-cleanup/report@1` for GUIs, scripts and monitoring; Markdown and JSON can be produced together (a `reportPath` ending in `.md` yields a sibling `.json`).
+- **Scheduled scans and alerts** `src/scheduler/`: with `config.schedule.enabled=true` (**off by default**) the plugin scans on an interval (default scope `hotspots`) and records an alert when free space drops below `alertFreePercent` (default 10%), also emitted through `ctx.logger`.
+  Host fact: cordis exposes `ctx.logger` / `ctx.effect` but **no timer service**, so this uses Node timers with `unref()` and `ctx.effect` for disposal.
+- **Four protections that keep the host safe**: single-flight (a still-running round makes the next one skip), a first-run delay (1 minute by default so startup I/O is not contended), a whole-round try/catch (failures only log), and `unref()` (the timer never blocks process exit).
+- **Reports and tool output**: the Markdown report gains "🔔 Alerts" and "📈 History trend" sections; the tool output gains `historyPath`, `reportJsonPath`, `trend`, `alerts` and `schedule`.
+- **Config**: `historyPath`, `defaultReportFormat`, `schedule.enabled/intervalHours/alertFreePercent/initialDelayMinutes/scope`.
+- **Tests**: `npm run m4` (33 checks: scheduling semantics with a fake scan plus one real hotspot scan wired through the trend) and `npm run m4:live` (a **real disk scan** end to end, comparing the history's free-space figure against `fs.statfs`).
+
+### Fixed
+
+- **Alert records were overwritten into scan records**: in `toAlertEntry` the `...input` spread came after `kind: 'alert'`, so the scan entry's `kind: 'scan'` won and alerts could never be filtered out (caught by checks 3.1/3.3). The spread now comes first.
+- **History id did not match the plan id**: history used a scan timestamp while plans used `plan-<timestamp>`, so a trend lookup could not find its own record and compared against the wrong baseline. The history id is now `plan.id`, giving one identity across plan, report file name and history.
+- **Double extension on the JSON report path**: passing `x.json` as `reportPath` produced `x.json.json`; `.md`, `.json` and other suffixes are now handled separately.
+
+### Known limitations
+
+- **Scheduled scans are off by default**: they consume background disk I/O, which needs explicit user consent.
+- **Trends compare the intersection of paths**: when a scan is truncated, "present last time, absent now" does not mean "cleaned" — the report notes `previousPartial`.
+- **The history file lives under `<DSH_HOME>`**: deliberately outside the caches being cleaned, so it cannot delete itself.
+
 ## [0.3.0] — M3: migration layer (junctions / ledger / rollback)
 
 ### Added
