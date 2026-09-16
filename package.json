@@ -29,6 +29,7 @@
     "m3": "tsx tests/m3-migrate.ts",
     "m4": "tsx tests/m4-history.ts",
     "m4:live": "tsx tests/m4-live-schedule.ts",
+    "m5": "tsx tests/m5-panel.ts",
     "scan": "tsx tests/tool-run.ts full",
     "prepare": "npm run build",
     "prepublishOnly": "npm run build"

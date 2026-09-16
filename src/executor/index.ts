@@ -33,6 +33,8 @@ export interface ExecuteRequest {
   /** 需要一并触发的管理员级系统清理 */
   elevation?: { dism?: boolean; dismResetBase?: boolean; cleanmgr?: boolean; cleanmgrId?: number };
   onProgress?: (message: string) => void;
+  /** 每有一条结果落表就回调一次（索引为该项在结果表中的位置），供 GUI 显示逐项进度 */
+  onItem?: (item: ExecutedItem, index: number) => void;
   signal?: AbortSignal;
 }
 
@@ -109,6 +111,12 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
 
   const freeBefore = await freeSpaceOf(root);
 
+  /** 逐项记账：推入结果表的同时回报进度（M5 面板靠它显示真实进度，而不是猜日志） */
+  const record = (item: ExecutedItem): void => {
+    items.push(item);
+    request.onItem?.(item, items.length - 1);
+  };
+
   log(`安全闸校验 ${request.targets.length} 个目标…`);
   const guards = await guardTargets(request.targets, {
     index: request.index,
@@ -118,7 +126,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
   });
 
   for (const refused of guards.refused) {
-    items.push({
+    record({
       path: refused.path,
       ruleId: refused.ruleId,
       action: 'refused',
@@ -142,7 +150,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
     if (requiresAdmin) {
       elevationTasks.push(taskRemoveDirectory(allowed.path, `删除 ${allowed.path}`));
       plannedBytes += knownSize;
-      items.push({
+      record({
         path: allowed.path,
         ruleId: allowed.ruleId,
         action: request.dryRun ? 'planned' : 'needs-elevation',
@@ -162,7 +170,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
         size = measured.sizeBytes;
       }
       plannedBytes += size;
-      items.push({
+      record({
         path: allowed.path,
         ruleId: allowed.ruleId,
         action: 'planned',
@@ -180,7 +188,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
     log(`处理 ${allowed.path}…`);
     if (request.mode === 'trash') {
       if (!request.trashPath) {
-        items.push({
+        record({
           path: allowed.path,
           ruleId: allowed.ruleId,
           action: 'refused',
@@ -197,7 +205,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
         onProgress: log,
       });
       plannedBytes += outcome.sizeBefore;
-      items.push({
+      record({
         path: allowed.path,
         ruleId: allowed.ruleId,
         action:
@@ -225,7 +233,7 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
       ? await emptyRecycleBin(allowed.path, { signal: request.signal, onProgress: log })
       : await deletePath(allowed.path, { signal: request.signal, onProgress: log });
     plannedBytes += outcome.sizeBefore;
-    items.push({
+    record({
       path: allowed.path,
       ruleId: allowed.ruleId,
       action:
@@ -259,12 +267,13 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
     log(`触发提权任务（${elevationTasks.length} 项），等待 UAC 授权…`);
     elevation = await runElevated(elevationTasks, { onProgress: log });
     if (elevation.canceled) {
-      for (const item of items) {
+      items.forEach((item, index) => {
         if (item.action === 'needs-elevation') {
           item.action = 'elevation-canceled';
           item.reason = '用户取消了 UAC 授权，未执行';
+          request.onItem?.(item, index); // 状态改写要补报一次，否则面板仍显示「等待提权」
         }
-      }
+      });
     }
     if (elevation.errors.length > 0) errors.push(...elevation.errors);
   } else if (request.dryRun && elevationTasks.length > 0) {
