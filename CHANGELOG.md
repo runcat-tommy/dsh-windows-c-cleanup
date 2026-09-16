@@ -1,5 +1,13 @@
 # 更新日志
 
+## [0.4.1] — 宿主实测修复（输出必须 lossless JSON / 报告落盘目录）
+
+### 修正
+
+- **宿主输出校验失败：`value is not lossless JSON`**（宿主实测抓到，非推断）。首次扫描没有上一次基准，`trend` 拿到 `undefined`，输出里就出现「键在、值为 `undefined`」——而 DSH 用 `snapshotJsonValue` 判定 lossless JSON，会拒绝嵌套 `undefined`、非有限数、稀疏数组、异物原型，于是**整次调用被拒**（扫描其实已经跑完落在历史里，只是结果回不来）。
+  修复：M4 的可选字段集中到 `optionalFields()`，**只把有值的键放进去**；并新增 8.x 断言（`isLossless` 往返检查 + 首次扫描场景 + 空告警省略）把这条契约锁死。源码对照：`@deepseek-ai/dsh-tools` 在返回时快照并校验 lossless JSON，失败即抛 `value is not lossless JSON`。
+- **报告默认落盘目录改为会话工作目录**：宿主 `process.cwd()` 是用户主目录，报告会掉进 `C:\Users\<你>\`。现在优先取 `exec.agent.session.meta.cwd`，取不到才退化到宿主 cwd；任何一环缺失都不会导致失败（9.1–9.4 覆盖四种情况）。
+
 ## [0.4.0] — M4：打磨（历史趋势 / JSON 报告 / 定时扫描与告警）
 
 ### 新增

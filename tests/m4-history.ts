@@ -23,7 +23,7 @@ import {
 } from '../src/history/index.js';
 import { JSON_REPORT_SCHEMA } from '../src/report/json.js';
 import { createScheduler, describeSchedule } from '../src/scheduler/index.js';
-import { registerDiskCleanupTool } from '../src/tools/disk-cleanup.js';
+import { optionalFields, outputDir, registerDiskCleanupTool } from '../src/tools/disk-cleanup.js';
 import type { HistoryEntry } from '../src/history/index.js';
 
 const MB = 1024 * 1024;
@@ -35,6 +35,42 @@ let failed = 0;
 function check(name: string, ok: boolean, detail = ''): void {
   if (!ok) failed++;
   console.log(`${ok ? '✅' : '❌'} ${name}${detail ? `\n     ${detail}` : ''}`);
+}
+
+/**
+ * 宿主输出契约：返回值必须是 lossless JSON。
+ * `undefined` 值、NaN/Infinity、bigint、函数都会让 JSON 往返丢信息，宿主会直接拒掉整次调用。
+ */
+function isLossless(value: unknown): boolean {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.every(isLossless);
+  if (typeof value === 'object') {
+    return Object.values(value as Record<string, unknown>).every((item) => item !== undefined && isLossless(item));
+  }
+  return false;
+}
+
+/** 找出第一处违规，失败时用来指认现场 */
+function firstViolation(value: unknown, trail = ''): string {
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return '';
+  if (typeof value === 'number') return Number.isFinite(value) ? '' : `${trail} = ${value}`;
+  if (Array.isArray(value)) {
+    for (const [i, item] of value.entries()) {
+      const bad = firstViolation(item, `${trail}[${i}]`);
+      if (bad) return bad;
+    }
+    return '';
+  }
+  if (typeof value === 'object') {
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (item === undefined) return `${trail}${trail ? '.' : ''}${key} = undefined`;
+      const bad = firstViolation(item, `${trail}${trail ? '.' : ''}${key}`);
+      if (bad) return bad;
+    }
+    return '';
+  }
+  return `${trail} = ${typeof value}`;
 }
 
 function entry(overrides: Partial<HistoryEntry> & { at: string; id: string; freeBytes: number }): HistoryEntry {
@@ -306,6 +342,60 @@ async function main(): Promise<void> {
     cleanupOk = false;
   }
   check('7.4 effect 的清理函数可安全调用（插件卸载即停表）', cleanupOk);
+
+  // ---------- 8. 宿主输出契约：必须是 lossless JSON ----------
+  console.log('\n--- 8. 宿主输出契约（lossless JSON：不得有值为 undefined 的键）---');
+  check('8.1 真实 plan 输出是 lossless JSON', isLossless(planOut), firstViolation(planOut));
+  check('8.2 format=json 输出是 lossless JSON', isLossless(jsonOut), firstViolation(jsonOut));
+  check('8.3 format=both 输出是 lossless JSON', isLossless(bothOut), firstViolation(bothOut));
+  check(
+    '8.4 只出 Markdown 时不带 reportJsonPath 键（而不是值为 undefined）',
+    !('reportJsonPath' in planOut),
+    `report* 键=${Object.keys(planOut)
+      .filter((key) => key.toLowerCase().includes('report'))
+      .join(',')}`,
+  );
+
+  const fresh = optionalFields({ historyPath: 'C:\\x\\history.jsonl' });
+  check(
+    '8.5 首次扫描（无趋势基准）时省略 trend / reportJsonPath 键',
+    !('trend' in fresh) && !('reportJsonPath' in fresh) && fresh.historyPath === 'C:\\x\\history.jsonl',
+    JSON.stringify(fresh),
+  );
+  const all = optionalFields({
+    historyPath: 'h',
+    reportJsonPath: 'r.json',
+    schedule: '每 24 小时',
+    alerts: ['告警一条'],
+    trend: {
+      previousAt: '2026-01-01T00:00:00.000Z',
+      hoursAgo: 1,
+      freeDeltaBytes: 1,
+      grownCount: 1,
+      shrunkCount: 0,
+      topGrowth: 'x',
+    },
+  });
+  check('8.6 有值时全部保留（含告警与趋势）', isLossless(all) && Object.keys(all).length === 5, JSON.stringify(Object.keys(all)));
+  check('8.7 没有告警时省略 alerts 键（空数组也不放）', !('alerts' in optionalFields({ alerts: [] })));
+
+  // ---------- 9. 报告落盘目录 ----------
+  console.log('\n--- 9. 报告落盘目录（会话工作目录优先于宿主 cwd）---');
+  check('9.1 显式 reportDir 最优先', outputDir({ reportDir: 'D:\\x' } as never) === 'D:\\x');
+  const withSession = outputDir({} as never, {
+    signal: new AbortController().signal,
+    agent: { session: { meta: { cwd: 'D:\\ws' } } },
+  } as never);
+  check('9.2 未配 reportDir 时用会话工作目录（实测宿主 cwd 是用户主目录）', withSession === 'D:\\ws', withSession);
+  check(
+    '9.3 取不到会话目录时退化到宿主 cwd，不抛错',
+    outputDir({} as never, { signal: new AbortController().signal } as never) === process.cwd(),
+  );
+  check(
+    '9.4 会话元数据不完整时同样安全退化',
+    outputDir({} as never, { signal: new AbortController().signal, agent: { session: { meta: {} } } } as never) ===
+      process.cwd(),
+  );
 
   // ---------- 收尾 ----------
   await fs.rm(sandbox, { recursive: true, force: true });

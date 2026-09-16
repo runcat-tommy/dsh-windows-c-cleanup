@@ -182,8 +182,44 @@ const unavailable = (action: Action, message: string): DiskCleanupOutput => ({
   message,
 });
 
-function outputDir(config: Config): string {
-  return config.reportDir ?? process.cwd();
+/**
+ * 组装 M4 的可选输出字段：**只把「有值」的键放进去**。
+ *
+ * 宿主的输出校验要求返回值是 lossless JSON，而 `JSON.stringify` 会丢掉值为
+ * `undefined` 的键——于是「键存在、值是 undefined」会被判为不合法，整次调用报错
+ * （宿主实测：首次扫描没有上一次基准 → `trend: undefined` → `value is not lossless JSON`）。
+ * 所以这条规则不能靠自觉，集中到一个函数里并由测试锁住。
+ */
+export function optionalFields(input: {
+  historyPath?: string;
+  reportJsonPath?: string;
+  schedule?: string;
+  alerts?: string[];
+  trend?: TrendView;
+}): Partial<DiskCleanupOutput> {
+  const out: Partial<DiskCleanupOutput> = {};
+  if (input.historyPath !== undefined) out.historyPath = input.historyPath;
+  if (input.reportJsonPath !== undefined) out.reportJsonPath = input.reportJsonPath;
+  if (input.schedule !== undefined) out.schedule = input.schedule;
+  // 空数组也是合法 JSON，但「没有告警」时省略该键，输出更干净
+  if (input.alerts !== undefined && input.alerts.length > 0) out.alerts = input.alerts;
+  if (input.trend !== undefined) out.trend = input.trend;
+  return out;
+}
+
+/**
+ * 报告的默认落盘目录。
+ *
+ * 优先用**会话工作目录**（用户正在看的那个目录），而不是宿主的 `process.cwd()`
+ * ——实测宿主 cwd 是用户主目录，报告会掉进 `C:\Users\<你>\` 而不是工作区。
+ * 会话目录取值走 `exec.agent.session.meta.cwd`（dsh-agent 的会话元数据），
+ * 任何一环缺失都退化到宿主 cwd，绝不因为取不到路径而失败。
+ */
+export function outputDir(config: Config, exec?: ToolRunContext): string {
+  if (config.reportDir) return config.reportDir;
+  const sessionCwd = (exec?.agent as { session?: { meta?: { cwd?: unknown } } } | undefined)?.session?.meta?.cwd;
+  if (typeof sessionCwd === 'string' && sessionCwd.length > 0) return sessionCwd;
+  return process.cwd();
 }
 
 /** 面向模型/人的紧凑摘要（纯函数） */
@@ -591,7 +627,7 @@ export function registerDiskCleanupTool(ctx: Context, config: Config): void {
           signal: exec.signal,
         });
 
-        const execReportPath = path.join(outputDir(config), `C盘清理执行报告-${nowStamp()}.md`);
+        const execReportPath = path.join(outputDir(config, exec), `C盘清理执行报告-${nowStamp()}.md`);
         await fs.mkdir(path.dirname(execReportPath), { recursive: true });
         await fs.writeFile(execReportPath, renderExecutionReport(report), 'utf8');
 
@@ -701,7 +737,7 @@ async function runScan(input: {
 
   const format = (args.format as 'markdown' | 'json' | 'both' | undefined) ?? config.defaultReportFormat;
   const requested = args.reportPath as string | undefined;
-  const defaultBase = path.join(outputDir(config), `C盘清理报告-${nowStamp()}`);
+  const defaultBase = path.join(outputDir(config, exec), `C盘清理报告-${nowStamp()}`);
   // reportPath 指向 .md 时，附带的 JSON 报告换同名的 .json；只出 JSON 时直接用该路径
   const markdownPath = requested ?? `${defaultBase}.md`;
   const jsonPath = requested
@@ -750,23 +786,25 @@ async function runScan(input: {
     status: 'ok',
     planId: plan.id,
     reportPath,
-    reportJsonPath,
-    historyPath,
-    schedule,
-    alerts,
-    trend: trend
-      ? {
-          previousAt: trend.previousAt,
-          hoursAgo: trend.hoursAgo,
-          freeDeltaBytes: trend.freeDeltaBytes,
-          grownCount: trend.grown.length,
-          shrunkCount: trend.shrunk.length,
-          topGrowth:
-            trend.grown.length > 0
-              ? `${shortPath(trend.grown[0].path, 48)} +${formatBytes(trend.grown[0].deltaBytes)}`
-              : '无显著增长',
-        }
-      : undefined,
+    ...optionalFields({
+      historyPath,
+      reportJsonPath,
+      schedule,
+      alerts,
+      trend: trend
+        ? {
+            previousAt: trend.previousAt,
+            hoursAgo: trend.hoursAgo,
+            freeDeltaBytes: trend.freeDeltaBytes,
+            grownCount: trend.grown.length,
+            shrunkCount: trend.shrunk.length,
+            topGrowth:
+              trend.grown.length > 0
+                ? `${shortPath(trend.grown[0].path, 48)} +${formatBytes(trend.grown[0].deltaBytes)}`
+                : '无显著增长',
+          }
+        : undefined,
+    }),
     scannedAt: plan.createdAt,
     durationMs: Date.now() - started,
     partial: plan.partial,
@@ -975,7 +1013,7 @@ async function runMigrationAction(input: {
     partial: items.some((item) => item.action === 'failed' || item.action === 'partial'),
   };
 
-  const reportPath = path.join(outputDir(config), `C盘迁移报告-${nowStamp()}.md`);
+  const reportPath = path.join(outputDir(config, exec), `C盘迁移报告-${nowStamp()}.md`);
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(reportPath, renderExecutionReport(report), 'utf8');
 

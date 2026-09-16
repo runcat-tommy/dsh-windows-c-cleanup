@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.4.1] — fixes found by running in the real host (lossless JSON output / report directory)
+
+### Fixed
+
+- **Host output validation failed with `value is not lossless JSON`** (caught live, not inferred). A first-ever scan has no previous baseline, so `trend` was `undefined` and the output carried a key whose value is `undefined`. DSH judges lossless JSON with `snapshotJsonValue`, which rejects nested `undefined`, non-finite numbers, sparse arrays and exotic prototypes — so the **entire call was rejected** (the scan itself had already completed and reached the history; only its result could not come back).
+  Fix: the M4 optional fields now go through `optionalFields()`, which **includes only keys that have a value**; checks 8.x (an `isLossless` round-trip check, the first-scan case, and empty-alert omission) lock the contract down. Source reference: `@deepseek-ai/dsh-tools` snapshots and validates the returned lossless JSON and throws `value is not lossless JSON` on failure.
+- **The default report directory is now the session working directory**: the host's `process.cwd()` is the user's home directory, so reports landed in `C:\Users\<you>\`. The plugin now prefers `exec.agent.session.meta.cwd` and falls back to the host cwd only when it is unavailable; no missing link can make the call fail (checks 9.1–9.4 cover all four cases).
+
 ## [0.4.0] — M4: polish (history trend / JSON report / scheduled scans and alerts)
 
 ### Added
