@@ -75,6 +75,14 @@ export interface PanelStateView {
   };
   migrationTarget?: { letter: string; root: string; freeBytes: number };
   runningJobs: number;
+  /** 正在跑的任务 id：面板切走再回来靠它接上进度（拿 id 就能用 progress 拉完整视图） */
+  runningJobIds?: string[];
+  /**
+   * 宿主是否正在扫盘。**以宿主为准**：组件卸载不该让用户丢掉一次扫描 —— 正在扫就继续显示
+   * loading 并轮询，扫完用 `scan-view` 把结果接回来。
+   * 可选：老宿主没有这个字段，缺省按"没在扫"处理（面板退化成原来的行为）。
+   */
+  scan?: { running: boolean; scope: string; startedAt?: string };
   trend?: TrendView;
 }
 

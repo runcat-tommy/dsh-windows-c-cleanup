@@ -92,6 +92,23 @@ let jobSeq = 0;
 /** 最近一次扫描结果：预演 / 执行复用它提供的项与大小，避免每次都重新扫盘 */
 let lastScan: { plan: Plan; classified: ClassifiedItem[]; at: string; scope: 'hotspots' | 'full' } | undefined;
 
+/**
+ * **正在跑的扫描**（宿主侧的唯一权威）。
+ *
+ * 起因是用户实测：扫描途中切到对话页再切回来，loading 没了、扫完的结果也不出现。
+ * 根因是扫描跑在**宿主**侧、组件卸载只丢了面板的本地状态 —— 而结果的最终形态
+ * （`lastScan` + `scan-view`）其实一直在宿主这儿。所以这里把"在跑"这件事也记在宿主：
+ *  1. `panelState().scan` 如实报告，面板回来后据此重新显示 loading 并轮询；
+ *  2. 同一时刻只允许一次扫描 —— 面板回来后用户又点了一次「扫描」就接上这一次，
+ *     既省一次全盘遍历，也不会让两份结果互相覆盖。
+ */
+interface ActiveScan {
+  scope: 'hotspots' | 'full';
+  startedAt: string;
+  promise: Promise<PanelScanResult>;
+}
+let activeScan: ActiveScan | undefined;
+
 /** 面板发起的报告落到哪：显式 reportDir 优先，否则落在历史文件旁边的 reports/ */
 export function panelOutputDir(config: Config): string {
   if (config.reportDir) return config.reportDir;
@@ -123,6 +140,16 @@ export interface PanelState {
   };
   migrationTarget?: { letter: string; root: string; freeBytes: number };
   runningJobs: number;
+  /**
+   * 正在跑的任务 id（面板切走再回来靠它接上进度：拿到 id 就用既有的 `progress` 拉完整视图）。
+   * `runningJobs` 是它的数量，保留是为了兼容老面板。
+   */
+  runningJobIds: string[];
+  /**
+   * 宿主此刻是否正在扫盘。面板把它当权威：正在扫就继续显示 loading 并每秒问一次，
+   * 扫完就把 `scan-view` 里缓存的结果接回来（组件卸载不该让用户丢掉一次扫描）。
+   */
+  scan: { running: boolean; scope: 'hotspots' | 'full'; startedAt?: string };
   trend?: Trend;
 }
 
@@ -145,6 +172,9 @@ export async function panelState(config: Config, scheduler?: SchedulerLike): Pro
           const previous = previousScan(entries, last.id);
           return previous === undefined ? undefined : computeTrend(previous, last);
         })();
+  const runningJobIds = [...jobs.values()]
+    .filter((job) => job.view.status === 'running')
+    .map((job) => job.view.jobId);
 
   return {
     systemDrive: system?.letter ?? 'C',
@@ -163,7 +193,13 @@ export async function panelState(config: Config, scheduler?: SchedulerLike): Pro
     ...(target === undefined
       ? {}
       : { migrationTarget: { letter: target.letter, root: driveRoot(target.letter), freeBytes: target.freeBytes } }),
-    runningJobs: [...jobs.values()].filter((j) => j.view.status === 'running').length,
+    runningJobs: runningJobIds.length,
+    runningJobIds,
+    // 宿主如实报告"此刻在不在扫"：面板切走再回来（甚至刷新页面）靠这一行接上 loading 与结果
+    scan:
+      activeScan === undefined
+        ? { running: false, scope: config.defaultScope }
+        : { running: true, scope: activeScan.scope, startedAt: activeScan.startedAt },
     ...(trend === undefined ? {} : { trend }),
   };
 }
@@ -241,8 +277,29 @@ function groupView(items: ClassifiedItem[], locale: LocaleId = 'zh'): PanelGroup
   };
 }
 
-/** 扫描：与工具/定时扫描同一条流水线（loadRules → scanSystem → classify → buildPlan → 历史） */
+/**
+ * 扫描：与工具/定时扫描同一条流水线（loadRules → scanSystem → classify → buildPlan → 历史）。
+ *
+ * 这一层只管一件事：**同一时刻只扫一次**。面板切走再回来（组件重新挂载）后用户又点「扫描」时，
+ * 直接接上还在跑的那一次，而不是并发扫第二遍 —— 省一次全盘遍历，也不会让两份结果互相覆盖。
+ * 真正的流水线在 `runPanelScan` 里。
+ */
 export async function panelScan(
+  config: Config,
+  args: { scope?: 'hotspots' | 'full'; locale?: LocaleId } = {},
+  hooks: { onProgress?: (message: string) => void; signal?: AbortSignal } = {},
+): Promise<PanelScanResult> {
+  if (activeScan !== undefined) return activeScan.promise;
+  const startedAt = new Date().toISOString();
+  const promise = runPanelScan(config, args, hooks).finally(() => {
+    // 只有"自己还是当前那一次"时才清空：并发保护 + 不误删后来者的登记
+    if (activeScan?.promise === promise) activeScan = undefined;
+  });
+  activeScan = { scope: args.scope ?? config.defaultScope, startedAt, promise };
+  return promise;
+}
+
+async function runPanelScan(
   config: Config,
   args: { scope?: 'hotspots' | 'full'; locale?: LocaleId } = {},
   hooks: { onProgress?: (message: string) => void; signal?: AbortSignal } = {},
@@ -808,6 +865,7 @@ export function disposePanelJobs(): void {
   }
   jobs.clear();
   lastScan = undefined;
+  activeScan = undefined;
 }
 
 function migrateReason(

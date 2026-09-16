@@ -572,6 +572,51 @@ async function main(): Promise<void> {
   // 删掉 11.7（见 §8.3：lastScan 是模块级单例，得在 disposePanelJobs 之后才谈"没有缓存"）
 
 
+  // ---------- 12. 切视图后再回来：宿主如实报告"在不在扫" ----------
+  console.log('\n--- 12. 后台扫描的可见性（切走再回来能接上） ---');
+
+  const idleState = await panelState(config);
+  check(
+    '12.1 空闲时状态里明确说"没在扫"（面板据此不轮询）',
+    idleState.scan.running === false && idleState.scan.scope === 'hotspots' && idleState.scan.startedAt === undefined,
+    JSON.stringify(idleState.scan),
+  );
+  check(
+    '12.2 runningJobIds 与 runningJobs 一致，空闲时为空数组（面板靠 id 接上进度）',
+    Array.isArray(idleState.runningJobIds) && idleState.runningJobIds.length === idleState.runningJobs && idleState.runningJobIds.length === 0,
+    JSON.stringify(idleState.runningJobIds),
+  );
+
+  // 起一次真扫但不 await：模拟用户点了扫描。热点预算调到 3 秒 —— 让"正在扫"这个窗口足够长，
+  // 断言不会跟"扫描已经跑完"抢跑（面板切走再回来时看到的就是这个窗口）。
+  const fastConfig = { ...config, hotspotTimeBudgetMs: 3000, topTreeTimeBudgetMs: 3000 } as unknown as Config;
+  const historyCount = async (): Promise<number> =>
+    (await fs.readFile(config.historyPath as string, 'utf8')).trim().split('\n').filter(Boolean).length;
+  const historyBefore = await historyCount();
+  const firstScan = panelScan(fastConfig, { scope: 'hotspots' });
+  // 面板重新挂载后用户又点了一次「扫描」：必须接上同一次，而不是并发扫第二遍
+  const secondScan = panelScan(fastConfig, { scope: 'hotspots' });
+  const during = await panelState(config);
+  check(
+    '12.3 扫描进行中如实报告"正在扫"（面板回来后据此重新显示 loading 并轮询）',
+    during.scan.running === true && during.scan.startedAt !== undefined,
+    JSON.stringify(during.scan),
+  );
+  const [firstView, secondView] = await Promise.all([firstScan, secondScan]);
+  check(
+    '12.4 同一时刻只扫一次：第二次「扫描」接上同一次（同一 planId，不并发扫两遍）',
+    firstView.planId === secondView.planId,
+    `${firstView.planId} / ${secondView.planId}`,
+  );
+  check('12.5 只写了一条历史（接上同一次，没有重复扫盘）', (await historyCount()) === historyBefore + 1, `${historyBefore} → ${await historyCount()}`);
+  const afterScan = await panelState(config);
+  const settledView = (await endpoints['scan-view']({ locale: 'zh' })) as { available: boolean; view?: { planId: string } };
+  check(
+    '12.6 扫完回到"没在扫"，且 scan-view 接上的正是刚扫完那次（结果不会因为切视图而丢）',
+    afterScan.scan.running === false && settledView.available === true && settledView.view?.planId === firstView.planId,
+    `${JSON.stringify(afterScan.scan)}｜缓存 planId=${settledView.view?.planId}`,
+  );
+
   // ---------- 8. 卸载清理 ----------
   console.log('\n--- 8. 卸载与清理 ---');  disposePanelJobs();
   check('8.1 卸载后任务表清空（面板会显示「任务已随宿主重启消失」）', panelProgress(started.jobId).found === false);

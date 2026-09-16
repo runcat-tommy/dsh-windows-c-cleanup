@@ -35,7 +35,7 @@ C:\ 真实文件系统
 
 | 方法 | 入参 | 出参（要点） |
 | --- | --- | --- |
-| `state` | `{}` | `{ schedule, historyPath, reportDir, defaultScope, drives, lastScan }` |
+| `state` | `{}` | `{ schedule, historyPath, reportDir, defaultScope, drives, lastScan, scan: { running, scope, startedAt? }, runningJobs, runningJobIds }` |
 | `scan` | `{ scope?: 'hotspots'\|'full' }` | `{ planId, at, summary, groups, bigItems, longTerm, trend, partial, partialReasons }` |
 | `preview` | `{ paths: string[], mode?: 'trash'\|'permanent', grade?, targetDrive? }` | `{ plannedBytes, items: [{ path, sizeBytes, verdict, reason, kind: 'delete'\|'trash'\|'elevate'\|'refused' }], refused: [...] }` |
 | `migratePreview` | `{ paths: string[], targetDrive?: string }` | `{ items: [{ source, destination, sizeBytes, fileCount, hasRoom }], targetFreeBytes, needsLink: true }` |
@@ -47,6 +47,13 @@ C:\ 真实文件系统
 | `history` | `{ limit?: number }` | `{ entries: [...], trend }` |
 
 **进度为什么用轮询而不是推送**：进度是"当前值"语义，轮询一次拿全量快照最简单、最不容易在断线/刷新后失步；面板打开时 1 秒一次，完成后停。job 表为内存 Map，宿主重启即清空（面板据此显示"任务已随宿主重启消失"）。
+
+**"正在发生的事"由宿主持有，组件卸载不许把它带走**（用户实测踩过：扫描途中切到对话页再切回来，loading 与结果都丢了）。面板插在会话视图里，切走会**卸载组件**，本地 React 状态随之清零，所以凡是"正在发生的事"都不能只活在组件里：
+
+- `state.scan` 如实报告**宿主此刻在不在扫盘**（扫描本来就跑在宿主侧，卸载不影响它）；面板挂载/切语言时据此重新显示 loading，并每 1.2 秒问一次，一旦不在扫了就用 `scan-view` 把缓存结果接回来（这次是"我等到的"，补一条完成提示）。老宿主缺字段时按"没在扫"处理，退化成原样行为、不报错；
+- `state.runningJobIds` 让面板用 jobId 接上跑着的任务（进度条与逐项明细继续走）；
+- **宿主侧同一时刻只扫一次**（`activeScan` 单例）：面板回来后用户又点「扫描」就接上还在跑的那一次，省一次全盘遍历，也不会让两份结果互相覆盖；
+- 反过来**勾选与预演不跨卸载保留**：它们本来就是"当前意图"的本地态，且改动勾选/模式本就会让预演作废，回到面板按"重新勾选 → 重新预演"走，如实、不假装。
 
 ## 4. 安全规则（与工具一致，且在 UI 层再加一道）
 
@@ -121,4 +128,4 @@ idle ──扫描──▶ scanning ──▶ ready(卡片+趋势)
 
 已知仍未跟随语言的：**已完成任务**的逐项明细（执行器在跑的时候渲染好并留存在任务表里），以及宿主直接返回的 `error` 文本。切语言后它们保留执行时的语言；要看新语言请重跑预演或重新扫描。
 
-面板落地后的实测口径：`npm run m5`（宿主面 71 项，含第 11 节「切语言后的缓存重渲染」5 项）与 `npm run m5:client`（客户端产物 59 项，离线重放浏览器加载、中英各真渲染一次首屏，含第 7 节样式可辨识度、第 8 节确认门禁、第 9 节语言跟随）全绿。
+面板落地后的实测口径：`npm run m5`（宿主面 77 项，含第 11 节「切语言后的缓存重渲染」5 项、第 12 节「后台扫描的可见性」6 项）与 `npm run m5:client`（客户端产物 73 项，离线重放浏览器加载、中英各真渲染一次首屏，含第 7 节样式可辨识度、第 8 节执行入口唯一性与门禁、第 9 节语言跟随、第 11 节切视图后的状态认领）全绿。

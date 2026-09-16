@@ -139,6 +139,20 @@ The arrows are purely decorative (`aria-hidden`, skipped by screen readers) and 
 - Real progress from the host's per-item accounting callback (not parsed log text), with a working "cancel job";
 - Migration preview showing source → destination, file count and whether the target volume has room; app config changes are only *suggested*, never applied silently.
 
+#### Switching to the chat view and back does not lose work in progress
+
+The panel lives inside the conversation view, so **switching away unmounts its component** (and with it the local React state). Anything "currently happening" is therefore reclaimed from the **host as the source of truth**, never remembered locally:
+
+| What you switched away from | The host's authoritative state | What you see on return |
+| --- | --- | --- |
+| A running "Scan C:" | `panelState().scan = {running, scope, startedAt}` (the scan runs host-side, so unmounting changes nothing) | The "Scanning C:" ⏳ comes right back, and the panel asks the host every 1.2 s |
+| A scan that finished while you were away | The result in the host cache (`scan-view`) | The candidate cards appear immediately, plus a "Scan complete" notice — no need to scan again |
+| A real cleanup / migration in progress | `panelState().runningJobIds` | The panel reattaches to the job by id, so the progress bar and per-item detail keep going |
+
+The host also **scans only one at a time**: if you click "Scan" again after coming back, it joins the scan already running (saving a full disk walk and keeping two results from overwriting each other; checks 12.3–12.5).
+
+One honest limitation: **the selection and the preview are not preserved across unmounts** (changing the selection or mode invalidates a preview anyway, so on return the flow is "select again → preview again"). The `scan` and `runningJobIds` fields are new in 0.5.1; an older host that has not been restarted (`dsh web`) lacks them, and the panel degrades to its previous behaviour without erroring (check 11.6).
+
 #### Bilingual UI (Chinese / English)
 
 Both the panel and the host text exist as **two complete sets** and follow the DSH locale automatically — there is no language switcher to click:
@@ -152,6 +166,8 @@ Both the panel and the host text exist as **two complete sets** and follow the D
 - **Wiring has an ordering requirement**: dictionaries must be registered *before* the framework renders a registration that declares `locale:`, so the client plugin waits for the locale service with `ctx.inject(['locale'])`. `dsh.client.inject` therefore lists `@deepseek-ai/dsh-client-locale` too — that is a package-metadata change, so the first upgrade needs a **`dsh web` restart**; after that, text changes only need a page refresh.
 
 Browser and host talk over the generic Connection RPC channel `/dsh-c-cleanup` (`authority: loopback`, local callers only) with endpoints `state` / `scan` / `scan-view` / `preview` / `execute` / `migrate` / `progress` / `cancel` / `history` and friends. The job table lives in host memory and is cleared on host restart.
+
+The `state` endpoint is the panel's "remount entry point": besides drives and scheduler state it truthfully reports **whether a scan is running right now** (`scan`) and **which jobs are running** (`runningJobIds`) — that is how the panel reattaches its UI after you switch views and come back (see the previous section). The scan and the jobs themselves run host-side and are unaffected by the component unmounting.
 
 **What it takes to go live** (platform mechanics, not a plugin choice):
 

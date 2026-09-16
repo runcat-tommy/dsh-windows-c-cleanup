@@ -70,7 +70,21 @@ const fakeDocument = {
   },
   head: { appendChild: () => {} },
 };
-const fakeWindowRuntime = { setInterval: () => 1, clearInterval: () => {} };
+/**
+ * 轮询用到的定时器面：`setInterval` 照旧是空操作（任务进度轮询在测试里不该自己跑起来），
+ * 但"认领宿主扫描"的轮询用的是 `setTimeout`，必须真的会触发 —— 且 `unref` 掉，
+ * 免得某个没停下来的轮询把测试进程挂住。
+ */
+const fakeWindowRuntime = {
+  setInterval: () => 1,
+  clearInterval: () => {},
+  setTimeout: (callback: () => void, ms?: number) => {
+    const handle = setTimeout(callback, ms);
+    if (typeof (handle as { unref?: () => void }).unref === 'function') (handle as { unref: () => void }).unref();
+    return handle as unknown as number;
+  },
+  clearTimeout: (handle: number) => clearTimeout(handle as unknown as NodeJS.Timeout),
+};
 
 const run = new Function('window', 'document', 'require', source) as (
   window: unknown,
@@ -126,12 +140,58 @@ const fakeState = {
   runningJobs: 0,
 };
 const rpcCalls: Array<{ endpoint: string; payload: unknown }> = [];
+/**
+ * `state` 端点的返回值脚本：每次调用依次弹出一个，用完了就一直用最后一项。
+ * 空数组时返回 `fakeState`（老宿主形态：没有 scan / runningJobIds 字段）。
+ */
+let stateScript: Array<Record<string, unknown>> = [];
+
+/** 认领测试用的最小扫描视图：形状必须完整，否则渲染期就会崩（测试正是要抓这个） */
+const fakeScanView = {
+  planId: 'plan-adopted',
+  at: new Date().toISOString(),
+  scope: 'hotspots',
+  systemDrive: 'C',
+  freeBytes: 68 * 1024 ** 3,
+  totalBytes: 220 * 1024 ** 3,
+  groups: {
+    safe: { count: 1, bytes: 1024, truncated: false, items: [{ path: 'C:\\Temp\\a.log', ruleId: 'temp', sizeBytes: 1024, grade: 'safe', reason: '临时文件', migratable: false }] },
+    caution: { count: 0, bytes: 0, truncated: false, items: [] },
+    migrate: { count: 0, bytes: 0, truncated: false, items: [] },
+    protected: { count: 0, bytes: 0, truncated: false, items: [] },
+  },
+  longTerm: [],
+  bigItems: [],
+  partial: false,
+  partialReasons: [],
+  historyPath: 'C:\\Users\\x\\.dsh\\windows-c-cleanup\\history.jsonl',
+};
+/** 认领测试用的在跑任务：形状完整，同样是"渲染不崩"的契约 */
+const fakeAdoptedJob = {
+  jobId: 'job-adopt-1',
+  kind: 'cleanup',
+  status: 'running' as const,
+  startedAt: new Date().toISOString(),
+  dryRun: false,
+  total: 2,
+  done: 1,
+  plannedBytes: 2048,
+  freedBytes: 1024,
+  measuredFreedBytes: 1024,
+  items: [{ path: 'C:\\Temp\\a.log', sizeBytes: 1024, action: 'trashed', reason: '已移到暂存区' }],
+};
+
 const fakeConnection = {
   rpc: {
     call: (channel: string, endpoint: string, payload: unknown) => {
       rpcCalls.push({ endpoint, payload });
       if (channel !== '/dsh-c-cleanup') throw new Error(`通道名不对：${channel}`);
-      if (endpoint === 'state') return Promise.resolve({ ok: true, value: fakeState });
+      if (endpoint === 'state') {
+        const next = stateScript.length > 1 ? stateScript.shift() : stateScript[0];
+        return Promise.resolve({ ok: true, value: { ...fakeState, ...(next ?? {}) } });
+      }
+      if (endpoint === 'scan-view') return Promise.resolve({ ok: true, value: { available: true, view: fakeScanView } });
+      if (endpoint === 'progress') return Promise.resolve({ ok: true, value: { found: true, job: fakeAdoptedJob } });
       return Promise.resolve({ ok: false, error: { code: 'internal', message: `测试未桩化端点 ${endpoint}` } });
     },
   },
@@ -629,6 +689,82 @@ console.log('\n--- 10. 功能模块名 ---');
     /font-size:11px/.test(titleCss) && /border-radius:999px/.test(titleCss) && /label-secondary/.test(titleCss),
     titleCss.slice(0, 100),
   );
+}
+
+// ---------- 11. 切走再回来：以宿主为准认领「正在扫描 / 正在跑的任务」 ----------
+console.log('\n--- 11. 切视图后再回来（状态认领） ---');
+{
+  const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  /** 取"从这个下标开始的调用序列"：先 sleep(0) 排干此前渲染留下的异步续跑，窗口里才只剩被测实例的调用 */
+  const callsSince = (index: number): string[] => rpcCalls.slice(index).map((call) => call.endpoint);
+  const settleMicrotasks = (): Promise<void> => sleep(30);
+  const panelSource = readFileSync(new URL('../client/src/panel.tsx', import.meta.url), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/^\s*\/\/.*$/gm, '');
+
+  // 场景一：面板挂载时宿主正在扫盘，1.2 秒后扫完（用户实测的场景）
+  await settleMicrotasks(); // 让之前那些渲染实例的收尾调用先落地，不混进下面的窗口
+  stateScript = [
+    { scan: { running: true, scope: 'hotspots', startedAt: new Date().toISOString() } },
+    { scan: { running: false, scope: 'hotspots' } },
+  ];
+  const mark = rpcCalls.length;
+  renderToText(component({ t: zhTranslate }));
+  await sleep(1800);
+  const window = callsSince(mark);
+  check(
+    '11.1 挂载时宿主正在扫盘 → 面板先问状态、并持续问下去（"正在扫描"的 loading 靠它撑住）',
+    window[0] === 'state' && window.filter((endpoint) => endpoint === 'state').length >= 2,
+    `窗口内调用序列：${window.join(',')}`,
+  );
+  check(
+    '11.2 扫完才去接结果（还在扫时不接），接的时候用 scan-view 而不是重扫',
+    window.filter((endpoint) => endpoint === 'scan-view').length === 1 &&
+      window.lastIndexOf('scan-view') > window.lastIndexOf('state'),
+    `窗口内调用序列：${window.join(',')}`,
+  );
+  const afterSettle = rpcCalls.length;
+  await sleep(1500);
+  check(
+    '11.3 扫完即停：不会一直空转轮询',
+    callsSince(afterSettle).length === 0,
+    `之后又多：${callsSince(afterSettle).join(',') || '无'}`,
+  );
+  check(
+    '11.4 loading 与完成提示都还在：loading 用同一句 scan 文案，接回结果时补一条完成提示',
+    (panelSource.match(/setBusy\(t\('busy\.scan'\)\)/g) ?? []).length === 2 &&
+      (panelSource.match(/notice\.scanDone/g) ?? []).length === 2,
+    `setBusy(scan)=${(panelSource.match(/setBusy\(t\('busy\.scan'\)\)/g) ?? []).length}｜notice.scanDone=${(panelSource.match(/notice\.scanDone/g) ?? []).length}`,
+  );
+
+  // 场景二：宿主有任务在跑 → 用 jobId 接上进度（切回来还能看到进度条）
+  await settleMicrotasks();
+  stateScript = [{ runningJobIds: ['job-adopt-1'] }];
+  const jobMark = rpcCalls.length;
+  renderToText(component({ t: zhTranslate }));
+  await sleep(120);
+  const adoptedIds = rpcCalls
+    .slice(jobMark)
+    .filter((call) => call.endpoint === 'progress')
+    .map((call) => (call.payload as { jobId?: string }).jobId);
+  check(
+    '11.5 挂载时若有任务在跑 → 拿 jobId 接上进度（进度条不会因为切视图就丢）',
+    adoptedIds.includes('job-adopt-1'),
+    `窗口内调用序列：${callsSince(jobMark).join(',')}｜接上的 id：${adoptedIds.join(',') || '无'}`,
+  );
+
+  // 场景三：老宿主没有 scan 字段（还没重启）→ 退化成原来的行为，绝不空转
+  await settleMicrotasks();
+  stateScript = [{}];
+  const oldMark = rpcCalls.length;
+  renderToText(component({ t: zhTranslate }));
+  await sleep(1500);
+  check(
+    '11.6 宿主没报 scan 字段（老宿主 / 未重启）→ 只查一次，不轮询（向后兼容）',
+    callsSince(oldMark).filter((endpoint) => endpoint === 'state').length === 1,
+    `窗口内调用序列：${callsSince(oldMark).join(',')}`,
+  );
+  stateScript = [];
 }
 
 console.log(`\n=== 结果：${failed === 0 ? '全部通过' : `${failed} 项失败`} ===`);

@@ -87,6 +87,9 @@ export function runGate(input: { busy: boolean; permanent: boolean; confirmed: b
   return 'ready';
 }
 
+/** 认领宿主后台扫描时的轮询间隔：比任务进度（1s）略慢，够用又不会白刷流量 */
+const SCAN_POLL_MS = 1200;
+
 const TIERS: Array<{ key: TierKey; icon: string }> = [
   { key: 'safe', icon: '🟢' },
   { key: 'caution', icon: '🟡' },
@@ -257,9 +260,81 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
     }
   }, [api]);
 
+  /**
+   * **挂载时（以及每次语言变化时）认领宿主侧的状态** —— 修的是用户实测的一个真问题：
+   * 扫描途中切到对话页再切回来，"正在扫描 C 盘"的 loading 没了，扫完的结果也不回来。
+   *
+   * 原因是扫描跑在**宿主**侧（面板组件卸载只丢了本地 state），而结果其实一直在宿主缓存里。
+   * 所以这里以宿主为权威：
+   *  1. `state.scan.running` 为真 → 用宿主的语言重新显示 loading，并每 1.2 秒问一次；
+   *  2. 一旦不在扫了 → 把 `scan-view` 里缓存的结果接回来（这次是我等到的，就补一条完成提示）；
+   *  3. 顺带认领**正在跑的任务**：拿到 jobId 就用既有的 progress 轮询接手，进度条不会丢。
+   * 宿主没这几个字段（老宿主 / 还没重启）时退化成原来的行为，不会报错。
+   */
   useEffect(() => {
-    void refreshState();
-  }, [refreshState]);
+    let alive = true;
+    let timer: number | undefined;
+    let owned = false; // 本实例是否正替"宿主的后台扫描"占用着 busy 文案
+
+    const adopt = async (withNotice: boolean): Promise<void> => {
+      try {
+        const cached = await api.scanView();
+        if (!alive || !cached.available || cached.view === undefined) return;
+        setScan(cached.view);
+        if (withNotice) {
+          setNotice({
+            key: 'notice.scanDone',
+            params: {
+              safe: formatBytes(cached.view.groups.safe.bytes),
+              caution: formatBytes(cached.view.groups.caution.bytes),
+              migrate: formatBytes(cached.view.groups.migrate.bytes),
+            },
+          });
+        }
+      } catch {
+        /* 拿不到就留着旧视图：认领失败不该打断用户 */
+      }
+    };
+
+    const tick = async (): Promise<void> => {
+      let running = false;
+      try {
+        const current = await api.state();
+        if (!alive) return;
+        setState(current);
+        running = current.scan?.running === true;
+        if (running && !owned) {
+          owned = true;
+          setBusy(t('busy.scan'));
+        }
+        const adoptedJob = current.runningJobIds?.[current.runningJobIds.length - 1];
+        if (adoptedJob !== undefined) {
+          const snapshot = await api.progress(adoptedJob);
+          if (alive && snapshot.job !== undefined) setJob(snapshot.job);
+        }
+      } catch {
+        /* 轮询失败按"没在扫"处理：不弹错、不把 loading 永久挂在界面上 */
+      }
+      if (!alive) return;
+      if (running) {
+        timer = window.setTimeout(() => void tick(), SCAN_POLL_MS);
+        return;
+      }
+      if (owned) {
+        owned = false;
+        setBusy('');
+        await adopt(true);
+        return;
+      }
+      await adopt(false);
+    };
+
+    void tick();
+    return () => {
+      alive = false;
+      if (timer !== undefined) window.clearTimeout(timer);
+    };
+  }, [api, t]);
 
   // 进度轮询：只在有任务在跑时开，跑完立刻停（1 秒一次，避免无谓流量）
   useEffect(() => {
@@ -300,13 +375,14 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
    * 字符串；面板把它们缓存在 state 里，切语言不会自动变。用户实测就是这个现象：切到英文后，
    * 界面框架是英文的，规则说明却还是中文。
    *
-   * 这里只做三件事，都是廉价调用（不扫盘、不真删）：
-   *  1. scan-view：让宿主用**缓存里那次扫描**按新语言重新出视图（毫秒级，零磁盘 I/O）；
-   *  2. 若已有预演，按同一份勾选 + 模式重跑预演（dryRun，只读）；
-   *  3. 若已有迁移预览，按同样的路径重跑（会重新测量，故只在用户确实在看时才做）。
+   * 这里做两件事，都是廉价调用（不扫盘、不真删）：
+   *  1. 若已有预演，按同一份勾选 + 模式重跑预演（dryRun，只读）；
+   *  2. 若已有迁移预览，按同样的路径重跑（会重新测量，故只在用户确实在看时才做）。
    *
-   * 只依赖 `t`（语言变化时才触发，首次挂载不请求）；勾选/模式/路径从最新值 ref 里取，
-   * 这样切语言的同时用户还在点勾选也不会把这次刷新打断。
+   * 扫描结果的重取**不在这里**：上面那个"认领宿主状态"的 effect 同样依赖 `t`，切语言时会重跑并
+   * 用新语言把结果接回来（它还顺带处理"切语言时扫描仍在跑"的情况）。
+   *
+   * 勾选/模式/路径从最新值 ref 里取，这样切语言的同时用户还在点勾选也不会把这次刷新打断。
    */
   const latestRef = useRef({ selected, mode, migrationPaths, migrationTarget: state?.migrationTarget?.letter });
   useEffect(() => {
@@ -315,12 +391,6 @@ export function CleanupPanel({ api, t: seat }: PanelProps): JSX.Element {
   useEffect(() => {
     let alive = true;
     void (async () => {
-      try {
-        const cached = await api.scanView();
-        if (alive && cached.available && cached.view !== undefined) setScan(cached.view);
-      } catch {
-        /* 拿不到就让旧视图留着，不打断用户 */
-      }
       const current = latestRef.current;
       if (current.selected.size > 0) {
         try {
