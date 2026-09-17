@@ -33,22 +33,65 @@ C 盘爆满通常不是「垃圾文件」造成的，而是**本该放在别的�
 
 ## 安装
 
+`dsh plugin` 是 **pnpm 的转发壳**：它把插件装进指定 profile，再按**装载后的真实状态**把它登记进 `dsh.profile.bundles`（本包声明了 `dsh.bundle.patch`，所以会被加进层叠列表）。三条路任选其一，**装完都要重启 DSH** 才生效。
+
+### 方式一：直接从 GitHub 安装
+
 ```powershell
-# 从 npm 安装（推荐，0.5.1 已发布）
-dsh plugin --profile web add dsh-windows-c-cleanup
-
-# 从 GitHub 安装（会跑一次构建，需要审批）
 dsh plugin --profile web add github:runcat-tommy/dsh-windows-c-cleanup
-
-# 从本地目录安装（开发时）
-dsh plugin --profile web add D:\path\to\windows-c-cleanup
 ```
 
-`dsh plugin` 会把包装进 profile 并自动把它登记进 `dsh.profile.bundles`（依赖包里声明了 `dsh.bundle.patch`）。装完**重启 DSH** 生效：
+- **适合**：想直接装仓库里的最新提交，本机已装 git。
+- **注意**：本仓库的 `lib/` 与 `client/client.js` 是构建产物、**没有提交进仓库**（靠 `prepare` 脚本在安装时现构建），所以这条路会**跑一次构建、需要你审批**，`dsh plugin` 会打印审批提示。
+- **更新**：重跑同一条命令（pnpm 会重新拉取该 git 源的最新提交）。
+
+### 方式二：先从 GitHub 下载到本地，再从本地目录安装
+
+```powershell
+# 第 1 步：把代码取到本地（git 克隆，或者在 GitHub 页面点 Code → Download ZIP 后解压）
+git clone https://github.com/runcat-tommy/dsh-windows-c-cleanup.git D:\dsh-plugins\dsh-windows-c-cleanup
+
+# 第 2 步：从本地目录安装
+dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
+```
+
+- **适合**：想装之前先看一眼代码、想自己改、或者网络不稳（可以先下载 ZIP 再解压，不必用 git）。
+- **注意**：本地目录会以 `link:` 形式装进 profile，**你改的代码立即生效**——宿主侧改动重启 `dsh web`，只改客户端界面则 `npm run build:client` 后刷新页面即可。
+- **更新**：在本地目录 `git pull`，再跑一次 `npm run build`，然后重启 `dsh web`。
+
+### 方式三：从 npm 安装（推荐）
+
+```powershell
+dsh plugin --profile web add dsh-windows-c-cleanup
+
+# 想钉住某个版本时
+dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
+```
+
+- **适合**：日常使用，最省心。npm 包里**已经带了构建产物**，所以不需要本机编译、不需要 git、也没有构建审批。
+- **更新**：`dsh plugin --profile web up dsh-windows-c-cleanup`
+- **卸载**（三条路都一样）：`dsh plugin --profile web remove dsh-windows-c-cleanup`
+- **看装了哪些**：`dsh plugin --profile web list`
+
+### 三条路怎么选
+
+| | 命令 | 需要什么 | 装进来的东西 | 更新方式 |
+| --- | --- | --- | --- | --- |
+| 一、GitHub 直装 | `add github:runcat-tommy/dsh-windows-c-cleanup` | 本机有 git；要过一次构建审批 | 仓库最新提交（安装时构建） | 重跑同一命令 |
+| 二、下载到本地 | `add D:\dsh-plugins\dsh-windows-c-cleanup` | 无（ZIP 也行） | 本地目录（`link:`，改代码即生效） | `git pull` + `npm run build` + 重启 |
+| 三、npm | `add dsh-windows-c-cleanup` | 无 | npm 上的发布版（已带产物） | `up dsh-windows-c-cleanup` |
+
+一句话：**npm 最省心，GitHub 直装最省事（但要构建审批），下载到本地最灵活（改动立即可见）**。
+
+### 装完重启
+
+三条路都一样，重启 DSH 后插件才会被加载：
 
 ```powershell
 dsh web
 ```
+
+重启后打开任意会话，就能在会话视图顶部看到「磁盘清理」tab。
 
 开发时也可以不安装，直接挂 overlay（注意 Windows 必须用 `file://` URL）：
 
@@ -179,11 +222,11 @@ JSON 报告带 `schema: "dsh-windows-c-cleanup/report@1"` 版本号，含五级�
 
 插件在 Web GUI 里注册一个**对话视图 tab**（`conversation.view`，additive list 插槽，不覆盖任何现有界面）：打开任意会话，切到「磁盘清理」就能完成「看懂 → 勾选 → 预演 → 执行」。
 
-实拍（同一份扫描结果，两种界面语言）：
+实拍（中文界面，与本文档语言一致；英文界面见 [README.en.md](README.en.md)）：
 
-| 中文界面 | English UI |
-| --- | --- |
-| ![磁盘清理面板中文界面](assets/preview-zh.jpg) | ![Disk cleanup panel, English UI](assets/preview-en.jpg) |
+| 中文界面 |
+| --- |
+| ![磁盘清理面板中文界面](assets/preview-zh.jpg) |
 
 面板是**薄的**：它不做任何业务判断，分级、安全闸、测量、释放量核算全部复用宿主侧既有模块；面板调用的「预演」和「真执行」走的是**同一个 `executeCleanup`**（只有 `dryRun` 不同），所以预演里出现的每一项、每个理由都与真执行一致。
 

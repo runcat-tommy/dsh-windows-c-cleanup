@@ -1,6 +1,6 @@
 {
   "name": "dsh-windows-c-cleanup",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "DSH 插件：Windows 系统盘清理能力 —— 扫描 → 五级分级（可安全删除/谨慎删除/建议迁移/保护名单/长期防护）→ 用户确认 → 分层执行与迁移",
   "type": "module",
   "main": "lib/index.js",

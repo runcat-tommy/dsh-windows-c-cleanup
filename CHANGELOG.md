@@ -1,5 +1,24 @@
 # 更新日志
 
+## [0.5.2] — 安装说明写清三条路 + 截图按语言分开
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@0.5.2`**（2026-09-17）。本次只改文档与说明，**功能与代码零变化**：
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup      # 首次安装
+  dsh plugin --profile web up dsh-windows-c-cleanup       # 已有安装则更新
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 变更
+
+- **安装说明重写成三条路**（中英各一份）：① GitHub 直装（会跑一次构建、需要审批）② 从 GitHub 下载到本地再装（`link:` 形式，改动立即生效）③ 从 npm 装（包内已带构建产物、最省心）。每条都写明**适合谁 / 要注意什么 / 怎么更新**，末尾附一张三路对照表与一句话总结。
+- **顺带把 `dsh plugin` 的真实语义写清楚**：它是 **pnpm 的转发壳**（`add` / `up` / `remove` / `list` 都是 pnpm 的命令），装完按**装载后的真实状态**把包登记进 `dsh.profile.bundles`，所以「更新后新版本才声明 `dsh.bundle`」这种情况也能正确激活。
+- **截图按语言分开**：中文 README 只放中文截图、英文 README 只放英文截图（此前两份都同时放了中英两张，读者会看到与当前语言无关的那一张）。`screenshots.json` 仍保留两张——市场详情页不区分浏览器语言，只留一张会让另一种语言没有预览。
+
 ## [0.5.1] — 面板改为中英双语 + 工具栏分组与预演说明
 
 ### 发布

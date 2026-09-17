@@ -31,22 +31,65 @@ Deleting those blindly is risky: rebuilding an IDE index takes hours, and removi
 
 ## Install
 
+`dsh plugin` is a **thin pnpm forwarder**: it installs the package into the named profile and then registers it in `dsh.profile.bundles` based on the **actual installed state** (this package declares `dsh.bundle.patch`, so it joins the layer stack). Pick any of the three routes below — all of them require a **DSH restart** to take effect.
+
+### Option 1: install straight from GitHub
+
 ```powershell
-# From npm (recommended; 0.5.1 is published)
-dsh plugin --profile web add dsh-windows-c-cleanup
-
-# From GitHub (runs a build, so it needs approval)
 dsh plugin --profile web add github:runcat-tommy/dsh-windows-c-cleanup
-
-# From a local checkout (development)
-dsh plugin --profile web add D:\path\to\windows-c-cleanup
 ```
 
-The package declares `dsh.bundle.patch`, so `dsh plugin` both installs it and registers it in `dsh.profile.bundles`. **Restart DSH** to activate:
+- **Best for**: grabbing the newest commit on the repo when you already have git installed.
+- **Note**: `lib/` and `client/client.js` are build artifacts and are **not committed** (they are produced by the `prepare` script), so this route **runs a build and asks for your approval**; `dsh plugin` prints the approval prompt.
+- **Updating**: run the same command again (pnpm re-fetches the latest commit of that git source).
+
+### Option 2: download from GitHub, then install from the local folder
+
+```powershell
+# Step 1: get the code (git clone, or Code → Download ZIP and unzip)
+git clone https://github.com/runcat-tommy/dsh-windows-c-cleanup.git D:\dsh-plugins\dsh-windows-c-cleanup
+
+# Step 2: install from the local folder
+dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
+```
+
+- **Best for**: reading the code before installing, making your own changes, or when the network is unreliable (download the ZIP instead of using git).
+- **Note**: a local folder is installed as a `link:`, so **your edits apply immediately** — host-side changes need a `dsh web` restart; client-only UI changes need `npm run build:client` plus a page refresh.
+- **Updating**: `git pull` in that folder, run `npm run build`, then restart `dsh web`.
+
+### Option 3: install from npm (recommended)
+
+```powershell
+dsh plugin --profile web add dsh-windows-c-cleanup
+
+# pin a version when you want to
+dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
+```
+
+- **Best for**: everyday use, and the least effort. The npm package **already ships the build artifacts**, so no local compiler, no git and no build approval are involved.
+- **Updating**: `dsh plugin --profile web up dsh-windows-c-cleanup`
+- **Uninstalling** (same for all three routes): `dsh plugin --profile web remove dsh-windows-c-cleanup`
+- **Listing what is installed**: `dsh plugin --profile web list`
+
+### Which route?
+
+| | Command | What it needs | What you get | Updating |
+| --- | --- | --- | --- | --- |
+| 1. Straight from GitHub | `add github:runcat-tommy/dsh-windows-c-cleanup` | git installed; one build approval | the newest commit (built at install time) | run the same command again |
+| 2. Download to a folder | `add D:\dsh-plugins\dsh-windows-c-cleanup` | nothing (a ZIP works too) | the local folder (`link:`, edits apply at once) | `git pull` + `npm run build` + restart |
+| 3. npm | `add dsh-windows-c-cleanup` | nothing | the published release (artifacts included) | `up dsh-windows-c-cleanup` |
+
+In one line: **npm is the least effort, GitHub-straight is the quickest (but needs a build approval), local-folder is the most flexible (edits show up immediately)**.
+
+### Restart after installing
+
+All three routes are the same here: the plugin is only loaded after DSH restarts.
 
 ```powershell
 dsh web
 ```
+
+Then open any session — the "Disk cleanup" tab appears at the top of the conversation view.
 
 For development you can skip installation and mount an overlay instead (on Windows the path must be a `file://` URL):
 
@@ -92,11 +135,11 @@ The tool returns drive info, reclaimable bytes per tier, the biggest top-N consu
 
 The plugin registers a **conversation view tab** in the Web GUI (`conversation.view`, an additive `list` slot — it never replaces or destroys any existing surface). Open any session, switch to "Disk cleanup", and go from "understand" to "select → preview → execute" without leaving the page.
 
-Real screenshots (same scan, two UI languages):
+Real screenshot (English UI, matching this document's language; the Chinese UI is in [README.md](README.md)):
 
-| English UI | 中文界面 |
-| --- | --- |
-| ![Disk cleanup panel, English UI](assets/preview-en.jpg) | ![磁盘清理面板中文界面](assets/preview-zh.jpg) |
+| English UI |
+| --- |
+| ![Disk cleanup panel, English UI](assets/preview-en.jpg) |
 
 The panel is deliberately **thin**: it makes no judgement of its own. Tiering, the safety gate, measurement and freed-bytes accounting all reuse the existing host modules, and the panel's *preview* and *real run* call the **same `executeCleanup`** (only `dryRun` differs) — so what you preview is exactly what would happen.
 

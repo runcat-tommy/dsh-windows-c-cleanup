@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.5.2] — Install instructions split into three routes + per-language screenshots
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@0.5.2`** (2026-09-17). Documentation and wording only — **no functional or code change**:
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup      # first install
+  dsh plugin --profile web up dsh-windows-c-cleanup       # update an existing install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Changed
+
+- **The install section is rewritten as three routes** (in both languages): ① install straight from GitHub (runs one build, needs approval), ② download from GitHub and install from the local folder (as a `link:`, so edits apply immediately), ③ install from npm (artifacts already inside the package, least effort). Each route states **who it suits / what to watch out for / how to update**, ending with a three-route comparison table and a one-line summary.
+- **The real meaning of `dsh plugin` is now spelled out**: it is a **thin pnpm forwarder** (`add` / `up` / `remove` / `list` are pnpm commands) that registers the package in `dsh.profile.bundles` based on the **actual installed state** — which is also why an update that newly declares `dsh.bundle` still activates correctly.
+- **Screenshots are split by language**: the Chinese README now shows only the Chinese screenshot and the English README only the English one (previously both showed both, so readers saw one image in a language that did not match the document). `screenshots.json` keeps both — a marketplace detail page has no browser-language awareness, so dropping one would leave the other language without a preview.
+
 ## [0.5.1] — Bilingual panel + grouped toolbar and preview help
 
 ### Release
