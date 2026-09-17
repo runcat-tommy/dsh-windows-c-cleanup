@@ -115,7 +115,7 @@ const ZH: Record<string, string> = {
   'preview.refused': '已拒绝 {count} 项（保护名单/越界/不存在，宿主的硬约束，面板无法绕过）：',
   'preview.permanentWarn': '永久删除不可恢复。若确认，请先勾选下面的确认框，再点「确认执行」。',
   'preview.permanentConfirm': '我已确认这些内容不再需要',
-  'preview.dryAgain': '再跑一次 dryRun',
+  'preview.dryAgain': '再预演一次',
 
   'migration.title': '🚚 迁移预览 → {root}（目标盘可用 {free}）',
   'migration.spaceOk': '空间够',
@@ -258,7 +258,7 @@ const EN: Record<string, string> = {
   'preview.refused': '{count} entries refused (protected list / out of scope / missing — the host\'s hard constraints, which this panel cannot bypass):',
   'preview.permanentWarn': 'Permanent deletion cannot be undone. To proceed, tick the confirmation box below, then click "Confirm and run".',
   'preview.permanentConfirm': 'I confirm these items are no longer needed',
-  'preview.dryAgain': 'Run the dryRun again',
+  'preview.dryAgain': 'Preview again (dry run)',
 
   'migration.title': '🚚 Migration preview → {root} ({free} free on the target)',
   'migration.spaceOk': 'Room available',
