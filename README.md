@@ -2,6 +2,8 @@
 
 [English](README.en.md) ｜ **中文**
 
+仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>（npm：[`dsh-windows-c-cleanup`](https://www.npmjs.com/package/dsh-windows-c-cleanup)）
+
 给 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（DSH）加上** Windows 系统盘（C 盘）清理能力**的插件。
 
 它不是「一键删缓存」脚本，而是把清理拆成一条可审计的流水线：
@@ -32,11 +34,14 @@ C 盘爆满通常不是「垃圾文件」造成的，而是**本该放在别的�
 ## 安装
 
 ```powershell
+# 从 npm 安装（推荐，0.5.1 已发布）
+dsh plugin --profile web add dsh-windows-c-cleanup
+
+# 从 GitHub 安装（会跑一次构建，需要审批）
+dsh plugin --profile web add github:runcat-tommy/dsh-windows-c-cleanup
+
 # 从本地目录安装（开发时）
 dsh plugin --profile web add D:\path\to\windows-c-cleanup
-
-# 或从 npm 安装（发布后）
-dsh plugin --profile web add dsh-windows-c-cleanup
 ```
 
 `dsh plugin` 会把包装进 profile 并自动把它登记进 `dsh.profile.bundles`（依赖包里声明了 `dsh.bundle.patch`）。装完**重启 DSH** 生效：
@@ -405,6 +410,7 @@ npm run m4:live                  # M4 定时扫描端到端（真扫盘，约 1 
 npm run m5                       # M5 面板宿主侧：分级/预演=执行同一条路/真暂存区/真迁移/取消/RPC 端点（含一次真实热点扫描）
 npm run m5:client                # M5 客户端 bundle 契约：重放浏览器的模块加载并真渲染一次面板（离线，秒级）
 npm run m5:live                  # M5 活体验证：直接问运行中的 dsh web 要 boot manifest 与产物（含与本地构建的哈希比对）
+npm run market:check             # 发布体检：把"能不能被 DSH 市场自动收录"的硬门槛钉成测试（离线，秒级）
 npx tsx tests/tool-run.ts full    # 无头跑完整扫描，产出真实报告
 npm run build                     # 编译到 lib/ 并打包 client/client.js（发布物）
 npm run build:client              # 只重新打包客户端 bundle（改了 client/src 之后）

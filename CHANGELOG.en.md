@@ -2,6 +2,20 @@
 
 ## [0.5.1] — Bilingual panel + grouped toolbar and preview help
 
+### Release
+
+- **First npm release: `dsh-windows-c-cleanup@0.5.1`** (2026-09-17) — the plugin's **first npm distribution** (until now it existed only as a GitHub repo plus local `link:` installs). Install with:
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup> (carries the `dsh-plugin` topic, which is how the marketplaces discover it automatically)
+- Metadata completed before publishing: `repository` / `homepage` / `bugs` (the repository field was empty until this release), `keywords` widened to 10 entries and aligned with the GitHub topics, and a new `dsh.marketplace` declaration (`profiles: ["web"]` / `requiresBuildApproval: false` / `requiresRestart: true` / `manualSteps: false`: the npm package ships its build artifacts, a restart is required, and there are no manual steps — a GitHub-source install still asks for build approval because the repo carries a `prepare` script, which is the marketplace's own rule).
+- Added `screenshots.json` (two real screenshots): a marketplace detail page reads **this file first** for previews and only falls back to extracting images from the README (which filters hard — measured: only 18% of marketplace entries have a preview at all).
+- The npm page shows the **English** `README.en.md` (npm renders only `README.md`): it is swapped in for the publish and restored with `git checkout` immediately afterwards.
+- Added `npm run market:check` (release health check, 21 checks): pins the hard requirements for **automatic** marketplace collection — valid package name and semver, a complete and same-origin `repository`/`homepage`/`bugs` trio, a patch path that is a safe in-repo relative path parsing to a YAML array, an inserted loader entry whose `name` equals the package name, `dsh.client.platform === 'web'` with `exports["./client"]` pointing at a file that exists, a tarball whitelist covering every runtime requirement, no `preinstall`/`install`/`postinstall` (the precondition for automatic install), a sane four-field `dsh.marketplace`, `screenshots.json` with 1–8 in-repo, non-empty, non-SVG images, and both READMEs carrying both install commands plus this repo's owner/repo. These fail **silently** (the code suites stay green while the marketplaces stop collecting the plugin), which is why they deserve their own suite.
+
 ### Added
 
 - **Bilingual UI** (follows the DSH locale; there is no manual switch):

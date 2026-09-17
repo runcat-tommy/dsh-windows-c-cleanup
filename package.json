@@ -40,6 +40,7 @@
     "m5": "tsx tests/m5-panel.ts",
     "m5:client": "tsx tests/m5-client-bundle.ts",
     "m5:live": "tsx tests/m5-live-panel.ts",
+    "market:check": "tsx tests/market-check.ts",
     "deps:link": "node scripts/link-dsh-deps.mjs",
     "scan": "tsx tests/tool-run.ts full",
     "prepare": "npm run build",
@@ -47,15 +48,27 @@
   },
   "keywords": [
     "dsh",
+    "dsh-plugin",
     "deepseek-harness",
+    "cordis",
     "cordis-plugin",
     "disk-cleanup",
+    "c-drive-cleanup",
+    "disk-space",
     "windows",
-    "c-drive"
+    "cleanup"
   ],
   "license": "MIT",
   "engines": {
     "node": ">=20"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/runcat-tommy/dsh-windows-c-cleanup.git"
+  },
+  "homepage": "https://github.com/runcat-tommy/dsh-windows-c-cleanup#readme",
+  "bugs": {
+    "url": "https://github.com/runcat-tommy/dsh-windows-c-cleanup/issues"
   },
   "dsh": {
     "bundle": {
@@ -68,6 +81,14 @@
         "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-locale"
       ]
+    },
+    "marketplace": {
+      "profiles": [
+        "web"
+      ],
+      "requiresBuildApproval": false,
+      "requiresRestart": true,
+      "manualSteps": false
     }
   },
   "peerDependencies": {

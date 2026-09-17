@@ -2,6 +2,8 @@
 
 **English** ｜ [中文](README.md)
 
+Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup> (npm: [`dsh-windows-c-cleanup`](https://www.npmjs.com/package/dsh-windows-c-cleanup))
+
 A [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) (DSH) plugin that adds **Windows system-drive (C:) cleanup** as an auditable pipeline:
 
 > **Scan → five-tier grading → visual report → user selection → tiered execution / migration to another drive**
@@ -30,11 +32,14 @@ Deleting those blindly is risky: rebuilding an IDE index takes hours, and removi
 ## Install
 
 ```powershell
+# From npm (recommended; 0.5.1 is published)
+dsh plugin --profile web add dsh-windows-c-cleanup
+
+# From GitHub (runs a build, so it needs approval)
+dsh plugin --profile web add github:runcat-tommy/dsh-windows-c-cleanup
+
 # From a local checkout (development)
 dsh plugin --profile web add D:\path\to\windows-c-cleanup
-
-# Or from npm (once published)
-dsh plugin --profile web add dsh-windows-c-cleanup
 ```
 
 The package declares `dsh.bundle.patch`, so `dsh plugin` both installs it and registers it in `dsh.profile.bundles`. **Restart DSH** to activate:
@@ -283,6 +288,7 @@ npm run m4:live                   # M4 scheduled scan end to end (real scan, ~1 
 npm run m5                        # M5 panel host half: tiering, preview == execute, real staging area, real migration, cancel, RPC endpoints
 npm run m5:client                 # M5 client bundle contract: replay the browser module load and really render the panel once (offline, seconds)
 npm run m5:live                   # M5 live check: ask the running dsh web for its boot manifest and the served bundle (hash-compared with the local build)
+npm run market:check              # Release health check: pins the hard requirements for automatic DSH marketplace collection (offline, seconds)
 npx tsx tests/tool-run.ts full     # headless full scan producing a real report
 npm run build                      # compile to lib/ and bundle client/client.js (publishable artifacts)
 npm run build:client               # re-bundle the client half only (after editing client/src)

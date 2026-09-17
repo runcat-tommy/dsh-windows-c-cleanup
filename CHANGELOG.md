@@ -2,6 +2,20 @@
 
 ## [0.5.1] — 面板改为中英双语 + 工具栏分组与预演说明
 
+### 发布
+
+- **首发 npm：`dsh-windows-c-cleanup@0.5.1`**（2026-09-17）—— 这是本插件的**第一个 npm 发行版**（此前只有 GitHub 仓库与本地 `link:` 安装）。安装：
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>（带 `dsh-plugin` topic，市场按此自动收录）
+- 发布前的元数据补齐：`repository` / `homepage` / `bugs`（首发前 `repository` 是空的）、`keywords` 扩到 10 个并与 GitHub topics 对齐、新增 `dsh.marketplace` 声明（`profiles: ["web"]` / `requiresBuildApproval: false` / `requiresRestart: true` / `manualSteps: false`：npm 包里已带构建产物、装完需重启、无需人工步骤；从 GitHub 源安装因为仓库带 `prepare` 脚本仍会要求构建审批，那是市场自己的规则）。
+- 补 `screenshots.json`（两张实测图）：市场详情页的预览图**先读仓库里这个文件**，没有它才退化成"从 README 抽图"（过滤极严，实测全市场只有 18% 的条目有预览图）。
+- npm 页面显示**英文** `README.en.md`（npm 只渲染 `README.md`），发布时临时覆盖、发布后立即 `git checkout` 恢复中文原文。
+- 新增 `npm run market:check`（发布体检，21 项）：把"能被市场自动收录"的硬门槛钉成测试 —— 包名/版本合法、repository 三件套齐全且同源、patch 是仓库内安全相对路径且解析为 YAML 数组、插入的 loader entry `name` 等于包名、`dsh.client.platform === 'web'` 且 `exports["./client"]` 指向存在的文件、tarball 白名单覆盖全部运行必需项、没有 `preinstall`/`install`/`postinstall`（自动安装前提）、`dsh.marketplace` 四件套取值合理、`screenshots.json` 1–8 张且都是仓库内非空非 svg 的图、双语 README 都给出 npm 与 `github:` 两条安装命令并出现本仓库 owner/repo。这些项**静默失效**（代码测试全绿但市场不再收录），所以值得单独钉住。
+
 ### 新增
 
 - **中英双语界面**（跟随 DSH 的语言设置，无手动开关）：
