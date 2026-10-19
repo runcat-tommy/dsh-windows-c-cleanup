@@ -1,5 +1,26 @@
 # Changelog
 
+## [1.0.1] — Compatible with the DSH 0.2.x line (verified on 0.2.1-rc.2)
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@1.0.1`** (2026-10-19). This is a **compatibility-declaration** release — no functional or UI change:
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.1   # first install
+  dsh plugin --profile web up dsh-windows-c-cleanup          # update an existing install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Changed
+
+- **Host requirement (`peerDependencies`) moved to the 0.2.x line**: `@deepseek-ai/dsh-tools` goes from a bare `*` to `^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.2.0-rc.1 || ^0.2.1-alpha.1`. Strict semver only accepts a prerelease host when the range contains a prerelease of the same `major.minor.patch`, so every line needs its own branch; a bare `*` matches no prerelease at all and leaves both the market and the profile check unable to judge compatibility.
+- **Development dependencies aligned with `0.2.1-rc.2`**: `@deepseek-ai/dsh-agent` / `dsh-llm` / `dsh-scope` / `dsh-session` / `dsh-system-prompt` / `dsh-tools` / `dsh-user-approval` move from an exact `0.1.0-rc.6` to the same range (`npm install` resolves to `0.2.1-rc.2`).
+- **Dropped `@deepseek-ai/dsh-code-runtime` and `@deepseek-ai/dsh-invariants`**: neither line is published for 0.2.1 any more (their newest versions are `0.1.5-rc.3` and `0.2.0-rc.2`), and `dsh-tools@0.2.1-rc.2` replaced them in its peer set with `dsh-sandbox` / `dsh-sandbox-policy` / `dsh-ptc-runtime` / `dsh-working-directory` (installed automatically by npm).
+- **Verified on a real 0.2.1-rc.2 host**: `typecheck`, `build` (host + client bundle), `smoke`, `tool-run hotspots`, `m2` (execution layer) and `m5` (panel) all pass; a real `disk_cleanup` scan from the GUI succeeds, and all 21 `market:check` items pass.
+- Version jumps from `0.5.2` to `1.0.1` per the release convention; no functional or code change, only dependency declarations and documentation.
+
 ## [0.5.2] — Install instructions split into three routes + per-language screenshots
 
 ### Release

@@ -1,5 +1,26 @@
 # 更新日志
 
+## [1.0.1] — 兼容 DSH 0.2.x 主线（实测 0.2.1-rc.2）
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@1.0.1`**（2026-10-19）。这是**兼容性声明**升级，功能与界面零变化：
+
+  ```powershell
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.1   # 首次安装
+  dsh plugin --profile web up dsh-windows-c-cleanup          # 已有安装则更新
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 变更
+
+- **宿主要求（`peerDependencies`）升级到 0.2.x 主线**：`@deepseek-ai/dsh-tools` 由裸 `*` 改为 `^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.2.0-rc.1 || ^0.2.1-alpha.1`。semver 只接受「范围里出现了同一 `major.minor.patch` 的预发布版」的预发布宿主，所以每条版本线都要各写一段；裸 `*` 不匹配任何预发布版，会让市场与 profile 体检无法判断兼容性。
+- **开发依赖对齐 `0.2.1-rc.2`**：`@deepseek-ai/dsh-agent` / `dsh-llm` / `dsh-scope` / `dsh-session` / `dsh-system-prompt` / `dsh-tools` / `dsh-user-approval` 从精确 `0.1.0-rc.6` 改为同一组范围（`npm install` 解析到 `0.2.1-rc.2`）。
+- **移除 `@deepseek-ai/dsh-code-runtime` 与 `@deepseek-ai/dsh-invariants`**：这两条线在 0.2.1 已不再发布（最高分别为 `0.1.5-rc.3` / `0.2.0-rc.2`），`dsh-tools@0.2.1-rc.2` 的 peer 也已换成 `dsh-sandbox` / `dsh-sandbox-policy` / `dsh-ptc-runtime` / `dsh-working-directory`（由 npm 自动装配）。
+- **在真实 0.2.1-rc.2 宿主上的验证**：`typecheck`、`build`（宿主 + 客户端 bundle）、`smoke`、`tool-run hotspots`、`m2`（执行层）、`m5`（面板）全部通过；GUI 里 `disk_cleanup` 实跑一次扫描成功。`market:check` 21 项全过。
+- 版本号按发布约定从 `0.5.2` 跳到 `1.0.1`；功能与代码零变化，只改依赖声明与文档。
+
 ## [0.5.2] — 安装说明写清三条路 + 截图按语言分开
 
 ### 发布

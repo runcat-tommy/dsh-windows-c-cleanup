@@ -65,7 +65,7 @@ dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
 dsh plugin --profile web add dsh-windows-c-cleanup
 
 # 想钉住某个版本时
-dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
+dsh plugin --profile web add dsh-windows-c-cleanup@1.0.1
 ```
 
 - **适合**：日常使用，最省心。npm 包里**已经带了构建产物**，所以不需要本机编译、不需要 git、也没有构建审批。
@@ -82,6 +82,16 @@ dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
 | 三、npm | `add dsh-windows-c-cleanup` | 无 | npm 上的发布版（已带产物） | `up dsh-windows-c-cleanup` |
 
 一句话：**npm 最省心，GitHub 直装最省事（但要构建审批），下载到本地最灵活（改动立即可见）**。
+
+### 兼容的 DSH 版本
+
+插件在 `peerDependencies` 里声明宿主要求：
+
+```json
+"@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.2.0-rc.1 || ^0.2.1-alpha.1"
+```
+
+也就是覆盖 DSH **`0.1.0-rc.6` 到 `0.2.1-rc.2`** 的预发布线（含 `0.1.1-rc.x`、`0.2.0-rc.x`、`0.2.1-alpha/rc`）。按 semver 的预发布规则，每个版本线都必须在范围里有一段以该 `major.minor.patch` 预发布为起点的分支，裸 `*` 不匹配任何预发布版。**实测宿主：`0.2.1-rc.2`**（`npm run typecheck` / `build` / `smoke` / `m2` / `m5` / `market:check` 全部通过）。
 
 ### 装完重启
 

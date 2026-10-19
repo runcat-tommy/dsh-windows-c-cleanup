@@ -63,7 +63,7 @@ dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
 dsh plugin --profile web add dsh-windows-c-cleanup
 
 # pin a version when you want to
-dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
+dsh plugin --profile web add dsh-windows-c-cleanup@1.0.1
 ```
 
 - **Best for**: everyday use, and the least effort. The npm package **already ships the build artifacts**, so no local compiler, no git and no build approval are involved.
@@ -80,6 +80,16 @@ dsh plugin --profile web add dsh-windows-c-cleanup@0.5.2
 | 3. npm | `add dsh-windows-c-cleanup` | nothing | the published release (artifacts included) | `up dsh-windows-c-cleanup` |
 
 In one line: **npm is the least effort, GitHub-straight is the quickest (but needs a build approval), local-folder is the most flexible (edits show up immediately)**.
+
+### Compatible DSH versions
+
+The plugin declares its host requirement in `peerDependencies`:
+
+```json
+"@deepseek-ai/dsh-tools": "^0.1.0-rc.6 || ^0.1.1-rc.1 || ^0.2.0-rc.1 || ^0.2.1-alpha.1"
+```
+
+That covers the DSH prerelease lines from **`0.1.0-rc.6` through `0.2.1-rc.2`** (including `0.1.1-rc.x`, `0.2.0-rc.x` and `0.2.1-alpha/rc`). Under strict semver a prerelease is only accepted when the range has a branch starting at a prerelease of the same `major.minor.patch`, which is why a bare `*` matches no prerelease at all. **Host version tested: `0.2.1-rc.2`** (`npm run typecheck` / `build` / `smoke` / `m2` / `m5` / `market:check` all pass).
 
 ### Restart after installing
 
