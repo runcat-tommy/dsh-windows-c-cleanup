@@ -1,5 +1,22 @@
 # 更新日志
 
+## [1.0.2] — 发布前体检补齐 `yaml` 依赖
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@1.0.2`**（2026-10-19）。只改开发依赖与文档，**运行时代码零变化**：
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # 已有安装则更新
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.2   # 首次安装
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 修复
+
+- **`npm run market:check` 不再因缺依赖误红**：`tests/market-check.ts` 用 `import('yaml')` 严格解析 `cordis.patch.yml`；解析器不可用时会退化成结构检查，而退化分支读不到 loader entry 的 `id`，于是第 2.4 项（loader entry id 稳定性）恒红。现在把 `yaml`（`^2.9.1`）正式写进 `devDependencies`，干净安装后 21 项体检即可稳定全绿。
+
 ## [1.0.1] — 兼容 DSH 0.2.x 主线（实测 0.2.1-rc.2）
 
 ### 发布

@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.0.2] — Ship the `yaml` dependency needed by the market pre-flight test
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@1.0.2`** (2026-10-19). Development dependency and documentation only — **no runtime code change**:
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # update an existing install
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.2   # first install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Fixed
+
+- **`npm run market:check` no longer fails on a missing dependency**: `tests/market-check.ts` parses `cordis.patch.yml` strictly with `import('yaml')`; when the parser is unavailable it falls back to a structural check, and that fallback cannot read the loader entry `id`, so item 2.4 (stable loader entry id) was always red. `yaml` (`^2.9.1`) is now a declared `devDependencies` entry, so all 21 checks pass reliably after a clean install.
+
 ## [1.0.1] — Compatible with the DSH 0.2.x line (verified on 0.2.1-rc.2)
 
 ### Release
