@@ -1,5 +1,23 @@
 # Changelog
 
+## [1.0.3] — The market pre-flight fallback now reads the loader entry `id`
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@1.0.3`** (2026-10-19). Test and documentation only — **no runtime code change**:
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # update an existing install
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.3   # first install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Fixed
+
+- **`npm run market:check` no longer goes red when `yaml` is absent**: the fallback branch in `tests/market-check.ts` used to read only `name` from `cordis.patch.yml` and could not see the loader entry `id`, so item 2.4 (stable loader entry id) was always red. The fallback now parses `id` as well, and both paths — strict parser and fallback — make all 21 checks pass.
+- Verified by moving `node_modules/yaml` away: the run is still **fully green** (the output notes "YAML parser unavailable, falling back to a structural check"). `yaml` stays in `devDependencies`, so a normal install uses the strict parser.
+
 ## [1.0.2] — Ship the `yaml` dependency needed by the market pre-flight test
 
 ### Release

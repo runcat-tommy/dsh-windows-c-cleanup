@@ -96,11 +96,20 @@ try {
   patchDocs = Array.isArray(parsed) ? (parsed as PatchOp[]) : undefined;
   parserNote = 'YAML 解析器：yaml（严格解析）';
 } catch {
-  // 解析器不可用时退化成结构检查，并如实标注，不让测试因缺依赖而误红
+  // 解析器不可用时退化成结构检查，并如实标注，不让测试因缺依赖而误红。
+  // 退化分支必须同时取到 id 与 name：只取 name 会让 2.4（loader entry id 稳定性）恒红。
   const text = read('cordis.patch.yml').replace(/^\s*#.*$/gm, '');
   const hasInsert = /^\s*-\s*insert:/m.test(text);
-  const name = /name:\s*['"]?([^'"\n]+)['"]?/.exec(text)?.[1]?.trim();
-  patchDocs = hasInsert && name === pkg.name ? [{ insert: [{ name }] }] : undefined;
+  const fieldOf = (key: 'id' | 'name'): string | undefined => {
+    const match = new RegExp(`^\\s*-?\\s*${key}:\\s*['"]?([^'"\\n]+?)['"]?\\s*$`, 'm').exec(text);
+    return match?.[1]?.trim();
+  };
+  const id = fieldOf('id');
+  const name = fieldOf('name');
+  patchDocs =
+    hasInsert && name === pkg.name
+      ? [{ insert: [{ ...(id === undefined ? {} : { id }), name: name as string }] }]
+      : undefined;
   parserNote = 'YAML 解析器不可用，退化为结构检查';
 }
 check(

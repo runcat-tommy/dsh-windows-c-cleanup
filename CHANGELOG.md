@@ -1,5 +1,23 @@
 # 更新日志
 
+## [1.0.3] — 发布前体检的 YAML 退化分支补齐 `id` 解析
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@1.0.3`**（2026-10-19）。只改测试与文档，**运行时代码零变化**：
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # 已有安装则更新
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.3   # 首次安装
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 修复
+
+- **`npm run market:check` 在没装 `yaml` 时不再误红**：`tests/market-check.ts` 的退化分支原先只从 `cordis.patch.yml` 里取 `name`，取不到 loader entry 的 `id`，于是第 2.4 项（id 稳定性）恒红。现在退化分支同样解析 `id`，严格解析与退化解析两条路径都能让 21 项全部通过。
+- 已实测：把 `node_modules/yaml` 移走后运行仍**全绿**（输出会标注「YAML 解析器不可用，退化为结构检查」）；`yaml` 仍保留在 `devDependencies`，装了就走严格解析。
+
 ## [1.0.2] — 发布前体检补齐 `yaml` 依赖
 
 ### 发布
