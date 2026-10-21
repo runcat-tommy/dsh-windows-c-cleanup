@@ -65,7 +65,7 @@ dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
 dsh plugin --profile web add dsh-windows-c-cleanup
 
 # 想钉住某个版本时
-dsh plugin --profile web add dsh-windows-c-cleanup@1.0.3
+dsh plugin --profile web add dsh-windows-c-cleanup@1.0.4
 ```
 
 - **适合**：日常使用，最省心。npm 包里**已经带了构建产物**，所以不需要本机编译、不需要 git、也没有构建审批。

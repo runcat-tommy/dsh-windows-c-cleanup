@@ -1,5 +1,24 @@
 # Changelog
 
+## [1.0.4] — Fix: "Scan C:" returned HTTP 405 under the DSH 0.2.x sandboxed ctx
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@1.0.4`** (2026-10-21). Fixes the Web panel's RPC registration; **the model tool behaves exactly as before**:
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # update an existing install
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.4   # first install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Fixed
+
+- **Root cause**: under DSH 0.2.x a plugin's `apply` receives a **sandboxed ctx** (the whitelist façade from `dsh-cordis-host-runner`). The façade exposes the lifecycle verbs (`effect` / `on` / `provide` …), `tools`, and services reachable through `ctx.get()`; framework internals such as `ctx.inject` and `ctx.logger` **throw when read** instead of returning `undefined`. The old code read `ctx.inject` inside `apply` to wait for the `connection` service, and that exception skipped the rest of the panel RPC registration — so the browser's `POST /dsh-c-cleanup/scan` fell through to the static handler and surfaced as `transport failure for /dsh-c-cleanup/scan: HTTP 405`.
+- **Fix**: panel registration now uses only what the façade allows — `ctx.get('connection')` to read the service, `ctx.on('internal/service')` to retry once it appears, `ctx.effect` for lifecycle ownership. Hosts without a `connection` service (CLI/headless) degrade silently and keep the tool working. `ctx.logger` is now also read through a try/catch.
+- **Regression test**: `tests/m5-panel.ts` gains case 9.13 — "a sandbox façade that forbids `ctx.inject` / `ctx.logger` still registers the channel without throwing"; case 9.4 no longer relies on `ctx.inject`.
+
 ## [1.0.3] — The market pre-flight fallback now reads the loader entry `id`
 
 ### Release

@@ -306,13 +306,8 @@ async function main(): Promise<void> {
   }
   const captured: Captured = {};
   const disposers: Array<() => void> = [];
-  let injected: string[] | undefined;
   let effectLabel = '';
   const rpcCtx = {
-    inject: (deps: string[], callback: () => void) => {
-      injected = deps;
-      callback();
-    },
     get: (name: string) =>
       name === 'connection'
         ? {
@@ -337,10 +332,11 @@ async function main(): Promise<void> {
       const disposer = callback();
       if (typeof disposer === 'function') disposers.push(disposer);
     },
+    on: () => {},
   };
   let disposed = 0;
   registerPanelRpc(rpcCtx as never, config);
-  check('9.4 用 ctx.inject 软等待 connection（不写进硬依赖）', injected?.join(',') === 'connection', JSON.stringify(injected));
+  check('9.4 用 ctx.get 读取 connection 并注册（不依赖被沙箱禁止的 ctx.inject）', captured.channel === PANEL_CHANNEL, String(captured.channel));
   check(
     '9.5 通道名合法且授权级别是本机 loopback',
     captured.channel === PANEL_CHANNEL && /^\/[A-Za-z0-9._~-]+$/.test(captured.channel ?? '') && captured.options?.authority === 'loopback',
@@ -391,6 +387,45 @@ async function main(): Promise<void> {
   }
   console.warn = originalWarn;
   check('9.12 宿主没有 connection 服务时静默降级（工具面不受影响）', cliThrew === false && warnings.some((line) => line.includes('connection')), warnings.join(' | '));
+
+  // 沙箱 ctx façade 回归（DSH 0.2.x）：读 ctx.inject / ctx.logger 会直接抛异常，
+  // 面板注册只能用 get / on / effect —— 否则 apply 后半段被跳过，浏览器侧报 HTTP 405。
+  let facadeChannel: string | undefined;
+  const facadeCtx = new Proxy(
+    {},
+    {
+      get(_target, prop) {
+        if (prop === 'get') {
+          return (name: string) =>
+            name === 'connection'
+              ? {
+                  rpc: {
+                    handle: (channel: string): (() => void) => {
+                      facadeChannel = channel;
+                      return () => {};
+                    },
+                  },
+                }
+              : undefined;
+        }
+        if (prop === 'effect') return (callback: () => (() => void) | void) => void callback();
+        if (prop === 'on') return () => {};
+        if (prop === 'tools') return { register: () => () => {} };
+        throw new Error(`sandbox ctx does not expose "${String(prop)}"`);
+      },
+    },
+  );
+  let facadeThrew = false;
+  try {
+    registerPanelRpc(facadeCtx as never, config);
+  } catch {
+    facadeThrew = true;
+  }
+  check(
+    '9.13 沙箱 façade（禁止 ctx.inject / ctx.logger）下仍能注册通道且不抛异常',
+    facadeThrew === false && facadeChannel === PANEL_CHANNEL,
+    `threw=${facadeThrew} channel=${facadeChannel}`,
+  );
 
   // ---------- 10. 宿主侧中英双语 ----------
   console.log('\n--- 10. 宿主侧文案双语 ---');

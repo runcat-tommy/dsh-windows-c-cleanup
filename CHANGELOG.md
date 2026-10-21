@@ -1,5 +1,24 @@
 # 更新日志
 
+## [1.0.4] — 修复：DSH 0.2.x 沙箱 ctx 下「扫描 C 盘」报 HTTP 405
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@1.0.4`**（2026-10-21）。修复 Web 面板的 RPC 注册，**模型工具行为不变**：
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # 已有安装则更新
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.4   # 首次安装
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 修复
+
+- **根因**：DSH 0.2.x 给插件 `apply` 的是**沙箱化 ctx**（`dsh-cordis-host-runner` 的白名单 façade）。façade 只放行 `effect` / `on` / `provide` 等生命周期动词、`tools`，以及 `ctx.get()` 查到的服务；`ctx.inject`、`ctx.logger` 这类框架内部成员**读取即抛异常**（不是返回 undefined）。旧代码在 `apply` 里读 `ctx.inject` 等待 `connection` 服务，异常把后面的面板 RPC 注册整段跳过，于是浏览器请求 `/dsh-c-cleanup/scan` 落到静态兜底，报 `transport failure for /dsh-c-cleanup/scan: HTTP 405`。
+- **修法**：面板注册只用 façade 允许的三件事 —— `ctx.get('connection')` 取服务、`ctx.on('internal/service')` 等服务就位后重试、`ctx.effect` 托管生命周期；没有 `connection` 的宿主（CLI/headless）静默降级，工具面不受影响。`ctx.logger` 同样改为 try/catch 取用。
+- **回归测试**：`tests/m5-panel.ts` 新增「沙箱 façade（禁止 `ctx.inject` / `ctx.logger`）下仍能注册通道且不抛异常」用例（9.13），旧用例改为不依赖 `ctx.inject`（9.4）。
+
 ## [1.0.3] — 发布前体检的 YAML 退化分支补齐 `id` 解析
 
 ### 发布

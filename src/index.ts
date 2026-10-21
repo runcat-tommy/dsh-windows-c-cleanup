@@ -44,7 +44,16 @@ export function apply(ctx: Context, config: Config): void {
   if (config.schedule?.enabled !== true) return;
 
   const historyPath = config.historyPath ?? defaultHistoryPath();
-  const logger = ctx.logger?.('windows-c-cleanup');
+  // 沙箱 ctx 的 façade 上 `logger` 属于未放行成员，直接读会抛异常（不是 undefined）
+  type LoggerLike = { info?: (message: string) => void; warn?: (message: string) => void; error?: (message: string) => void };
+  const logger = ((): LoggerLike | undefined => {
+    try {
+      const factory = (ctx as unknown as { logger?: (name: string) => LoggerLike }).logger;
+      return typeof factory === 'function' ? factory.call(ctx, 'windows-c-cleanup') : undefined;
+    } catch {
+      return undefined;
+    }
+  })();
 
   const scheduler = createScheduler(
     {
@@ -71,7 +80,7 @@ export function apply(ctx: Context, config: Config): void {
     },
   );
 
-  logger?.info(`定时扫描已启用：${describeSchedule(config.schedule)}；历史文件：${historyPath}`);
+  logger?.info?.(`定时扫描已启用：${describeSchedule(config.schedule)}；历史文件：${historyPath}`);
 
   const cleanup = (): void => scheduler.stop();
   // cordis 的 effect 会把清理器绑到当前 fiber；缺失时退回进程级清理，保证定时器不会泄漏

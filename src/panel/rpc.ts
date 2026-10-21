@@ -8,8 +8,15 @@
  * 两条硬约束：
  *  1. **返回必须是 RpcResult**（`{ok:true,value}` / `{ok:false,error:{code,message,details}}`），
  *     业务错误绝不能 throw —— 通道契约要求"方法不抛业务错误"；
- *  2. **不是所有宿主都有 connection 服务**（CLI 宿主就没有），所以这里用 `ctx.inject` 软等待 +
- *     `ctx.get` 取值，取不到就只打日志，工具面照常可用。
+ *  2. **不是所有宿主都有 connection 服务**（CLI 宿主就没有），所以这里用 `ctx.get('connection')`
+ *     取值 + `internal/service` 事件等待，取不到就静默跳过，工具面照常可用。
+ *
+ * ⚠️ DSH 0.2.x 起，插件的 `apply` 拿到的是**沙箱化 ctx**（`dsh-cordis-host-runner` 的白名单 façade）：
+ * 只放行 `effect` / `on` / `provide` 等生命周期动词、`tools`，以及 `ctx.get()` 查到的服务。
+ * 未被放行的框架内部成员（`ctx.inject`、`ctx.logger` 等）在 façade 上是**直接抛异常**的（不是 undefined），
+ * 一旦在 apply 里触碰，异常会把后面的面板注册整个跳过，浏览器侧就表现为
+ * `transport failure for /dsh-c-cleanup/scan: HTTP 405`（请求落到静态兜底）。
+ * 因此这里**绝不读取 `ctx.inject`**，只用 façade 允许的 get / on / effect。
  */
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from '../config.js';
@@ -96,61 +103,77 @@ export function panelEndpoints(
 
 /**
  * 注册面板 RPC 通道。宿主没有 connection 服务时（CLI 场景）静默跳过，
- * 只留一条日志说明，绝不让插件加载失败。
+ * 绝不让插件加载失败。
  *
- * `ctx.inject` / `ctx.effect` 都按「有则用、无则退化」处理：真实 cordis ctx 两者都有，
- * 但最小化替身（测试、CLI）可能只有一个，插件不该因此带崩宿主。
+ * 只使用沙箱 façade 放行的三件事：`ctx.get`（取服务）、`ctx.on`（等 internal/service）、
+ * `ctx.effect`（生命周期托管）。真实 cordis ctx 与最小化替身（测试、CLI）都能安全走同一套代码。
  */
 export function registerPanelRpc(ctx: Context, config: Config): void {
-  const wireUp = (scope?: Context): void => {
-    const holder = scope ?? ctx;
-    const get = (holder as unknown as { get?: (name: string) => unknown }).get;
-    const connection =
-      typeof get === 'function' ? (get.call(holder, 'connection') as { rpc?: ConnectionRpcLike } | undefined) : undefined;
-    const rpc = connection?.rpc;
-    if (rpc === undefined || typeof rpc.handle !== 'function') {
-      console.warn('windows-c-cleanup: 当前宿主没有 connection.rpc，清理面板未注册（模型工具不受影响）');
-      return;
-    }
+  const endpoints = panelEndpoints(config);
+  let dispose: (() => void) | undefined;
 
-    const endpoints = panelEndpoints(config);
-    const register = (): (() => void) => {
-      const disposing = rpc.handle(
-        PANEL_CHANNEL,
-        async (endpoint, payload) => {
-          const handler = endpoints[endpoint];
-          if (handler === undefined) return fail(`未知端点 ${endpoint}（可用：${Object.keys(endpoints).join(', ')}）`);
-          try {
-            const args = payload !== null && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
-            return ok(await handler(args));
-          } catch (error) {
-            return fail(error instanceof Error ? error.message : String(error));
-          }
-        },
-        { authority: 'loopback' },
-      );
-      return () => {
-        // handle 返回的是清理函数（调用它才真正撤掉路由），不是 Promise
-        try {
-          void disposing();
-        } catch {
-          /* 卸载期的清理失败不应影响其它插件 */
-        }
-      };
-    };
-
-    const effect = (ctx as unknown as { effect?: (callback: () => () => void, label?: string) => unknown }).effect;
-    if (typeof effect === 'function') {
-      effect.call(ctx, register, 'windows-c-cleanup: panel rpc');
-    } else {
-      register();
+  const connectionOf = (): { rpc?: ConnectionRpcLike } | undefined => {
+    const get = (ctx as unknown as { get?: (name: string) => unknown }).get;
+    if (typeof get !== 'function') return undefined;
+    try {
+      return get.call(ctx, 'connection') as { rpc?: ConnectionRpcLike } | undefined;
+    } catch {
+      return undefined;
     }
   };
 
-  const inject = (ctx as unknown as { inject?: (deps: string[], callback: (scope: Context) => void) => unknown }).inject;
-  if (typeof inject === 'function') {
-    inject.call(ctx, ['connection'], (scope: Context) => wireUp(scope));
+  const tryRegister = (): void => {
+    if (dispose !== undefined) return;
+    const rpc = connectionOf()?.rpc;
+    if (rpc === undefined || typeof rpc.handle !== 'function') return;
+
+    const handle = async (endpoint: string, payload: unknown): Promise<RpcResultLike> => {
+      const handler = endpoints[endpoint];
+      if (handler === undefined) return fail(`未知端点 ${endpoint}（可用：${Object.keys(endpoints).join(', ')}）`);
+      try {
+        const args = payload !== null && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
+        return ok(await handler(args));
+      } catch (error) {
+        return fail(error instanceof Error ? error.message : String(error));
+      }
+    };
+
+    // 第三个参数（authority）在 0.2.x 里已被忽略，保留是为了兼容 0.1.x 宿主
+    const disposing = rpc.handle(PANEL_CHANNEL, handle, { authority: 'loopback' });
+    dispose = () => {
+      // handle 返回的是清理函数（调用它才真正撤掉路由），不是 Promise
+      try {
+        void disposing();
+      } catch {
+        /* 卸载期的清理失败不应影响其它插件 */
+      }
+    };
+  };
+
+  const cleanup = (): void => {
+    dispose?.();
+    dispose = undefined;
+  };
+
+  const effect = (ctx as unknown as { effect?: (callback: () => (() => void) | void, label?: string) => unknown })
+    .effect;
+  if (typeof effect === 'function') {
+    effect.call(ctx, () => cleanup, 'windows-c-cleanup: panel rpc');
   } else {
-    wireUp();
+    process.once('exit', cleanup);
   }
+
+  tryRegister();
+  if (dispose !== undefined) return;
+
+  // connection 还没就位（服务注册顺序不保证）：等它出现再注册一次，而不是让面板永远 405
+  const on = (ctx as unknown as { on?: (event: string, callback: (...args: unknown[]) => void) => unknown }).on;
+  if (typeof on === 'function') {
+    on.call(ctx, 'internal/service', (name: unknown) => {
+      if (name === 'connection') tryRegister();
+    });
+    return;
+  }
+
+  console.warn('windows-c-cleanup: 当前宿主没有 connection.rpc，清理面板未注册（模型工具不受影响）');
 }
