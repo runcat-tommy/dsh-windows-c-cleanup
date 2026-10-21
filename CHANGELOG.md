@@ -1,5 +1,27 @@
 # 更新日志
 
+## [1.0.5] — 修复启用失败：`cannot get property "webServer" without inject`
+
+### 发布
+
+- **npm：`dsh-windows-c-cleanup@1.0.5`**（2026-10-21）。修复插件「启用」阶段失败，**模型工具行为不变**：
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # 已有安装则更新
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.5   # 首次安装
+  ```
+
+- 仓库：<https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### 修复
+
+- **根因**：面板 RPC 原先调用 `connection.rpc.handle(channel, handler)`。DSH 0.2.x 的实现里它通过 **caller 作用域 ctx** 的 `owner.webServer` 注册路由，而插件没有注入 `webServer`，cordis 直接抛 `cannot get property "webServer" without inject`；插件在启用阶段就失败（安装界面报 `1 entry did not activate windows-c-cleanup`），浏览器侧连带表现为 HTTP 405。
+- **修法**：不再用 `connection.rpc.handle`，改为在宿主 `webServer` 上自己注册 **prefix 路由** `/dsh-c-cleanup`，并照着 Connection 的信封实现服务端：
+  - 请求 `{ type: 'client-request', rpcId, method, payload }` → 响应 `{ type: 'server-response', rpcId, result: {ok:true,value} | {ok:false,error} }`，**客户端零改动**；
+  - 鉴权复用 `connection.requestRejection(request)`（与市场插件同一套 fence），并加同源校验（Origin 与 Host 不一致直接 403）与 1 MB 请求体上限；
+  - 宿主没有 `webServer`（headless/CLI）时静默跳过，工具面照常可用。
+- **回归测试**：`tests/m5-panel.ts` 第 9 组改为验证 prefix 路由注册、信封字段、未知端点 404、服务层异常折成 `{ok:false}`、非 POST 405、跨站 Origin 403、卸载清理、无 `webServer` 宿主降级、沙箱 façade 兼容。
+
 ## [1.0.4] — 修复：DSH 0.2.x 沙箱 ctx 下「扫描 C 盘」报 HTTP 405
 
 ### 发布

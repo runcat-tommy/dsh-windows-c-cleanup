@@ -63,7 +63,7 @@ dsh plugin --profile web add D:\dsh-plugins\dsh-windows-c-cleanup
 dsh plugin --profile web add dsh-windows-c-cleanup
 
 # pin a version when you want to
-dsh plugin --profile web add dsh-windows-c-cleanup@1.0.4
+dsh plugin --profile web add dsh-windows-c-cleanup@1.0.5
 ```
 
 - **Best for**: everyday use, and the least effort. The npm package **already ships the build artifacts**, so no local compiler, no git and no build approval are involved.

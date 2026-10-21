@@ -10,6 +10,7 @@
 import { promises as fs } from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import { Readable } from 'node:stream';
 import { type Config } from '../src/config.js';
 import { defaultHistoryPath } from '../src/history/index.js';
 import {
@@ -295,38 +296,89 @@ async function main(): Promise<void> {
     JSON.stringify(await endpoints.progress?.({ jobId: 'job-nope' })) === '{"found":false}',
   );
 
-  interface Captured {
-    channel?: string;
-    options?: { authority?: string };
-    handler?: (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<{
-      ok: boolean;
-      value?: unknown;
-      error?: { code?: string; message?: string; details?: unknown };
-    }>;
+  interface CapturedRoute {
+    kind?: string;
+    path?: string;
+    handler?: (request: unknown, response: unknown) => Promise<void> | void;
   }
-  const captured: Captured = {};
+  const captured: CapturedRoute = {};
   const disposers: Array<() => void> = [];
   let effectLabel = '';
+  let disposed = 0;
+
+  interface FakeResponse {
+    status: number;
+    headers: Record<string, unknown>;
+    body: string;
+    done: Promise<void>;
+    writeHead(status: number, headers?: Record<string, string>): FakeResponse;
+    end(body?: string): void;
+  }
+  const makeResponse = (): FakeResponse => {
+    let resolveDone = (): void => {};
+    const done = new Promise<void>((resolve) => {
+      resolveDone = resolve;
+    });
+    return {
+      status: 0,
+      headers: {},
+      body: '',
+      done,
+      writeHead(status, headers) {
+        this.status = status;
+        this.headers = headers ?? {};
+        return this;
+      },
+      end(body) {
+        this.body = body ?? '';
+        resolveDone();
+      },
+    };
+  };
+  const makeRequest = (payload: unknown, init: { method?: string; url?: string; host?: string; origin?: string } = {}) => {
+    const body = payload === undefined ? '' : JSON.stringify(payload);
+    const stream = Readable.from(body === '' ? [] : [Buffer.from(body)]);
+    return Object.assign(stream, {
+      method: init.method ?? 'POST',
+      url: init.url ?? '/dsh-c-cleanup/progress',
+      headers: {
+        host: init.host ?? '127.0.0.1:64884',
+        origin: init.origin ?? 'http://127.0.0.1:64884',
+      },
+    });
+  };
+  const callRoute = async (endpoint: string, payload: Record<string, unknown>, init: { method?: string; origin?: string } = {}) => {
+    const response = makeResponse();
+    const request = makeRequest(
+      { type: 'client-request', rpcId: 'rpc-1', method: endpoint, payload },
+      { url: `/dsh-c-cleanup/${endpoint}`, ...init },
+    );
+    await captured.handler?.(request, response);
+    await response.done;
+    let envelope: Record<string, unknown> = {};
+    try {
+      envelope = JSON.parse(response.body === '' ? '{}' : response.body) as Record<string, unknown>;
+    } catch {
+      envelope = { raw: response.body };
+    }
+    return { status: response.status, envelope, result: envelope.result as
+      | { ok: boolean; value?: unknown; error?: { code?: string; message?: string } }
+      | undefined };
+  };
+
+  const webServerFake = {
+    register(route: CapturedRoute): () => void {
+      captured.kind = route.kind;
+      captured.path = route.path;
+      captured.handler = route.handler;
+      return () => {
+        disposed++;
+      };
+    },
+  };
   const rpcCtx = {
     get: (name: string) =>
-      name === 'connection'
-        ? {
-            rpc: {
-              handle: (
-                channel: string,
-                handler: Captured['handler'],
-                options: { authority: string },
-              ): (() => void) => {
-                captured.channel = channel;
-                captured.handler = handler;
-                captured.options = options;
-                return () => {
-                  disposed++;
-                };
-              },
-            },
-          }
-        : undefined,
+      name === 'webServer' ? webServerFake : name === 'connection' ? { requestRejection: () => undefined } : undefined,
     effect: (callback: () => (() => void) | void, label?: string) => {
       effectLabel = label ?? '';
       const disposer = callback();
@@ -334,79 +386,76 @@ async function main(): Promise<void> {
     },
     on: () => {},
   };
-  let disposed = 0;
   registerPanelRpc(rpcCtx as never, config);
-  check('9.4 用 ctx.get 读取 connection 并注册（不依赖被沙箱禁止的 ctx.inject）', captured.channel === PANEL_CHANNEL, String(captured.channel));
   check(
-    '9.5 通道名合法且授权级别是本机 loopback',
-    captured.channel === PANEL_CHANNEL && /^\/[A-Za-z0-9._~-]+$/.test(captured.channel ?? '') && captured.options?.authority === 'loopback',
-    `${captured.channel} ｜ ${JSON.stringify(captured.options)}`,
+    '9.4 在 webServer 上注册 prefix 路由（不再依赖 connection.rpc.handle）',
+    captured.kind === 'prefix' && captured.path === PANEL_CHANNEL,
+    `${captured.kind} ${captured.path}`,
   );
+  check('9.5 路由路径符合 Connection 通道命名', /^\/[A-Za-z0-9._~-]+$/.test(captured.path ?? ''), String(captured.path));
   check('9.6 注册随 ctx.effect 托管（卸载即撤路由）', effectLabel.includes('panel rpc') && disposers.length === 1, effectLabel);
 
-  const handler = captured.handler;
-  check('9.7 拿到 RPC handler', typeof handler === 'function');
-  const okReply = await handler?.('progress', { jobId: 'job-nope' }, new AbortController().signal);
+  const okReply = await callRoute('progress', { jobId: 'job-nope' });
   check(
-    '9.8 成功分支是 RpcResult {ok:true,value}',
-    okReply?.ok === true && JSON.stringify(okReply.value) === '{"found":false}',
-    JSON.stringify(okReply),
+    '9.7 成功分支是 server-response 信封 + {ok:true,value}',
+    okReply.envelope.type === 'server-response' &&
+      okReply.envelope.rpcId === 'rpc-1' &&
+      okReply.result?.ok === true &&
+      JSON.stringify(okReply.result.value) === '{"found":false}',
+    JSON.stringify(okReply.envelope),
   );
-  const unknownReply = await handler?.('nope', {}, new AbortController().signal);
+
+  const unknownReply = await callRoute('nope', {});
   check(
-    '9.9 未知端点返回内部错误而不是抛异常（通道契约：方法不抛业务错误）',
-    unknownReply?.ok === false && unknownReply.error?.code === 'internal' && typeof unknownReply.error.message === 'string' && unknownReply.error.details !== undefined,
-    JSON.stringify(unknownReply),
+    '9.8 未知端点返回 {ok:false} 而不是 5xx',
+    unknownReply.status === 404 && unknownReply.result?.ok === false && typeof unknownReply.result.error?.message === 'string',
+    JSON.stringify(unknownReply.envelope),
   );
-  const thrownReply = await handler?.('migrate-preview', { paths: [null] }, new AbortController().signal);
+
+  const thrownReply = await callRoute('migrate-preview', { paths: [null] });
   check(
-    '9.10 服务层抛错被折成 {ok:false}（附带可读信息）',
-    thrownReply?.ok === false && (thrownReply.error?.message?.length ?? 0) > 0,
-    JSON.stringify(thrownReply).slice(0, 160),
+    '9.9 服务层抛错被折成 {ok:false}（HTTP 仍 200）',
+    thrownReply.status === 200 && thrownReply.result?.ok === false && (thrownReply.result.error?.message?.length ?? 0) > 0,
+    JSON.stringify(thrownReply.envelope).slice(0, 160),
   );
+
+  const wrongMethod = await callRoute('progress', {}, { method: 'GET' });
+  check('9.10a 非 POST 一律 405', wrongMethod.status === 405, String(wrongMethod.status));
+
+  const crossOrigin = await callRoute('progress', {}, { origin: 'http://evil.example' });
+  check('9.10b 跨站 Origin 被拒（403），防止别的网页驱动本机清理', crossOrigin.status === 403, String(crossOrigin.status));
 
   for (const disposer of disposers) disposer();
-  check('9.11 卸载时撤掉通道', disposed === 1, `disposed=${disposed}`);
+  check('9.11 卸载时撤掉路由', disposed === 1, `disposed=${disposed}`);
 
-  // 没有 connection 服务的宿主（CLI）：只警告，不抛错
-  const warnings: string[] = [];
-  const originalWarn = console.warn;
-  console.warn = (message?: unknown) => warnings.push(String(message));
+  // 没有 webServer 服务的宿主（headless/CLI）：不抛错、不注册
   let cliThrew = false;
   try {
-    registerPanelRpc(
-      {
-        inject: (_deps: string[], callback: () => void) => callback(),
-        get: () => undefined,
-        effect: () => {},
-      } as never,
-      config,
-    );
+    registerPanelRpc({ get: () => undefined, effect: () => {}, on: () => {} } as never, config);
   } catch {
     cliThrew = true;
   }
-  console.warn = originalWarn;
-  check('9.12 宿主没有 connection 服务时静默降级（工具面不受影响）', cliThrew === false && warnings.some((line) => line.includes('connection')), warnings.join(' | '));
+  check('9.12 宿主没有 webServer 时静默降级（工具面不受影响）', cliThrew === false, `threw=${cliThrew}`);
 
   // 沙箱 ctx façade 回归（DSH 0.2.x）：读 ctx.inject / ctx.logger 会直接抛异常，
   // 面板注册只能用 get / on / effect —— 否则 apply 后半段被跳过，浏览器侧报 HTTP 405。
-  let facadeChannel: string | undefined;
+  let facadePath: string | undefined;
   const facadeCtx = new Proxy(
     {},
     {
       get(_target, prop) {
         if (prop === 'get') {
           return (name: string) =>
-            name === 'connection'
+            name === 'webServer'
               ? {
-                  rpc: {
-                    handle: (channel: string): (() => void) => {
-                      facadeChannel = channel;
-                      return () => {};
-                    },
+                  register: (route: { path: string }): (() => void) => {
+                    facadePath = route.path;
+                    return () => {};
                   },
                 }
-              : undefined;
+              : name === 'connection'
+                ? { requestRejection: () => undefined }
+                : undefined;
         }
         if (prop === 'effect') return (callback: () => (() => void) | void) => void callback();
         if (prop === 'on') return () => {};
@@ -422,9 +471,9 @@ async function main(): Promise<void> {
     facadeThrew = true;
   }
   check(
-    '9.13 沙箱 façade（禁止 ctx.inject / ctx.logger）下仍能注册通道且不抛异常',
-    facadeThrew === false && facadeChannel === PANEL_CHANNEL,
-    `threw=${facadeThrew} channel=${facadeChannel}`,
+    '9.13 沙箱 façade（禁止 ctx.inject / ctx.logger）下仍能注册路由且不抛异常',
+    facadeThrew === false && facadePath === PANEL_CHANNEL,
+    `threw=${facadeThrew} path=${facadePath}`,
   );
 
   // ---------- 10. 宿主侧中英双语 ----------

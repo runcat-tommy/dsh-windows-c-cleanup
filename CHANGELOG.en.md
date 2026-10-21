@@ -1,5 +1,27 @@
 # Changelog
 
+## [1.0.5] — Fix activation failure: `cannot get property "webServer" without inject`
+
+### Release
+
+- **npm: `dsh-windows-c-cleanup@1.0.5`** (2026-10-21). Fixes the plugin failing to activate; **the model tool behaves exactly as before**:
+
+  ```powershell
+  dsh plugin --profile web up dsh-windows-c-cleanup          # update an existing install
+  dsh plugin --profile web add dsh-windows-c-cleanup@1.0.5   # first install
+  ```
+
+- Repository: <https://github.com/runcat-tommy/dsh-windows-c-cleanup>
+
+### Fixed
+
+- **Root cause**: the panel RPC used `connection.rpc.handle(channel, handler)`. In DSH 0.2.x that registers the route through the **caller-scoped ctx's** `owner.webServer`, so a plugin that does not inject `webServer` makes cordis throw `cannot get property "webServer" without inject`; the plugin then fails during activation (the installer reports `1 entry did not activate windows-c-cleanup`), and the browser sees the knock-on HTTP 405.
+- **Fix**: stop using `connection.rpc.handle` and register a **prefix route** `/dsh-c-cleanup` on the host `webServer` ourselves, speaking the Connection envelope:
+  - request `{ type: 'client-request', rpcId, method, payload }` → response `{ type: 'server-response', rpcId, result: {ok:true,value} | {ok:false,error} }`, so **the client is unchanged**;
+  - authorization reuses `connection.requestRejection(request)` (the same fence the market plugin uses), plus a same-origin check (Origin ≠ Host → 403) and a 1 MB body cap;
+  - hosts without `webServer` (headless/CLI) skip the panel silently and keep the tool working.
+- **Regression test**: section 9 of `tests/m5-panel.ts` now covers prefix-route registration, envelope fields, unknown endpoint 404, service exceptions folded into `{ok:false}`, non-POST 405, cross-origin 403, dispose cleanup, the no-`webServer` degradation path and sandbox-façade compatibility.
+
 ## [1.0.4] — Fix: "Scan C:" returned HTTP 405 under the DSH 0.2.x sandboxed ctx
 
 ### Release

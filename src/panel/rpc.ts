@@ -1,23 +1,25 @@
 /**
- * M5 面板的宿主侧 RPC 注册。
+ * M5 面板的宿主侧 RPC 注册（在 `webServer` 上注册 HTTP 路由，不再走 `connection.rpc.handle`）。
  *
- * 浏览器拿不到宿主工具（`ctx.tools` 是模型工具面），所以面板要走 Connection 的通用逻辑 RPC 通道：
- * 宿主用 `connection.rpc.handle(channel, handler, { authority: 'loopback' })` 注册一条绝对通道，
- * 通道名必须满足 `/^\/[A-Za-z0-9._~-]+$/`；客户端用 `connection.rpc.call(channel, endpoint, payload)` 调用。
+ * 浏览器拿不到宿主工具（`ctx.tools` 只是模型工具面），面板因此走 HTTP：
+ * 插件在宿主 `webServer` 上注册一条 **prefix 路由** `/dsh-c-cleanup`；浏览器侧仍是 DSH 的
+ * 通用 RPC 客户端 `connection.rpc.call(channel, endpoint, payload)`，它按 Connection 的信封
+ * POST 到 `<channel>/<endpoint>`：
+ *   请求 `{ type: 'client-request', rpcId, method, payload }`
+ *   响应 `{ type: 'server-response', rpcId, result: {ok:true,value} | {ok:false,error} }`
+ * 服务端照着这个信封自己实现，客户端零改动。
  *
- * 两条硬约束：
- *  1. **返回必须是 RpcResult**（`{ok:true,value}` / `{ok:false,error:{code,message,details}}`），
- *     业务错误绝不能 throw —— 通道契约要求"方法不抛业务错误"；
- *  2. **不是所有宿主都有 connection 服务**（CLI 宿主就没有），所以这里用 `ctx.get('connection')`
- *     取值 + `internal/service` 事件等待，取不到就静默跳过，工具面照常可用。
+ * 为什么不用 `connection.rpc.handle(...)`：DSH 0.2.x 的实现里它通过 caller 作用域 ctx 的
+ * `owner.webServer` 注册路由；调用方没有注入 `webServer` 时 cordis 直接抛
+ * `cannot get property "webServer" without inject`，插件会在「启用」阶段失败。
+ * 改为自己注册路由后，鉴权复用 `connection.requestRejection(request)`（与市场插件同一套 fence）。
  *
- * ⚠️ DSH 0.2.x 起，插件的 `apply` 拿到的是**沙箱化 ctx**（`dsh-cordis-host-runner` 的白名单 façade）：
- * 只放行 `effect` / `on` / `provide` 等生命周期动词、`tools`，以及 `ctx.get()` 查到的服务。
- * 未被放行的框架内部成员（`ctx.inject`、`ctx.logger` 等）在 façade 上是**直接抛异常**的（不是 undefined），
- * 一旦在 apply 里触碰，异常会把后面的面板注册整个跳过，浏览器侧就表现为
- * `transport failure for /dsh-c-cleanup/scan: HTTP 405`（请求落到静态兜底）。
- * 因此这里**绝不读取 `ctx.inject`**，只用 façade 允许的 get / on / effect。
+ * 三条硬约束：
+ *  1. 响应必须是 Connection 的 `server-response` 信封，`result` 为 RpcResult；
+ *  2. 业务错误折进 `{ok:false,error}`，不抛给 HTTP；
+ *  3. 宿主没有 `webServer` 服务（headless/CLI）时静默跳过，工具面照常可用。
  */
+import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { Context } from '@deepseek-ai/cordis';
 import type { Config } from '../config.js';
 import * as panel from './service.js';
@@ -26,15 +28,23 @@ import { normalizeLocale, type LocaleId } from '../i18n/index.js';
 /** 通道名：绝对路径，且只用 CHANNEL_PATTERN 允许的字符 */
 export const PANEL_CHANNEL = '/dsh-c-cleanup';
 
+/** 单次请求体上限：面板只发小 JSON，超出说明不是我们的客户端 */
+const MAX_BODY_BYTES = 1024 * 1024;
+
 type RpcErrorLike = { code: 'internal'; message: string; details: Record<string, never> };
 type RpcResultLike = { ok: true; value: unknown } | { ok: false; error: RpcErrorLike };
-type RpcHandlerLike = (endpoint: string, payload: unknown, signal: AbortSignal) => Promise<RpcResultLike>;
-interface ConnectionRpcLike {
-  handle(
-    channel: string,
-    handler: RpcHandlerLike,
-    options: { authority: 'trusted-host' | 'loopback' },
-  ): () => void | Promise<void>;
+
+interface WebServerRoute {
+  kind: 'prefix';
+  path: string;
+  handler: (request: IncomingMessage, response: ServerResponse) => void | Promise<void>;
+}
+interface WebServerLike {
+  register(route: WebServerRoute): () => void | Promise<void>;
+}
+interface ConnectionLike {
+  /** 返回 401/403（拒绝）或 undefined（放行） */
+  requestRejection?(request: IncomingMessage): number | undefined;
 }
 
 function ok(value: unknown): RpcResultLike {
@@ -48,6 +58,38 @@ function fail(message: string): RpcResultLike {
 function text(value: unknown): string {
   return typeof value === 'string' ? value : '';
 }
+
+function sendJson(response: ServerResponse, status: number, payload: unknown): void {
+  response.writeHead(status, {
+    'content-type': 'application/json; charset=utf-8',
+    'cache-control': 'no-store',
+  });
+  response.end(JSON.stringify(payload));
+}
+
+/** POST 必须同源（Origin 缺省放行；有就必须与 Host 一致，挡住别的网页驱动本机清理） */
+function sameOrigin(request: IncomingMessage): boolean {
+  const origin = request.headers.origin;
+  if (typeof origin !== 'string' || origin === '') return true;
+  try {
+    return new URL(origin).host === (request.headers.host ?? '');
+  } catch {
+    return false;
+  }
+}
+
+async function readBody(request: IncomingMessage): Promise<string> {
+  const chunks: Buffer[] = [];
+  let size = 0;
+  for await (const chunk of request) {
+    const buffer = typeof chunk === 'string' ? Buffer.from(chunk) : (chunk as Buffer);
+    size += buffer.length;
+    if (size > MAX_BODY_BYTES) throw new Error('请求体过大');
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks).toString('utf8');
+}
+
 
 /** 端点表：每个端点只做「取参 → 调服务层 → 返回」，业务判断全在服务层与既有模块里 */
 export function panelEndpoints(
@@ -102,46 +144,104 @@ export function panelEndpoints(
 }
 
 /**
- * 注册面板 RPC 通道。宿主没有 connection 服务时（CLI 场景）静默跳过，
- * 绝不让插件加载失败。
+ * 注册面板 HTTP 路由。宿主没有 `webServer` 服务时（headless/CLI）静默跳过，绝不让插件加载失败。
  *
- * 只使用沙箱 façade 放行的三件事：`ctx.get`（取服务）、`ctx.on`（等 internal/service）、
- * `ctx.effect`（生命周期托管）。真实 cordis ctx 与最小化替身（测试、CLI）都能安全走同一套代码。
+ * 只用 façade 放行的三件事：`ctx.get`（取服务）、`ctx.on`（等 internal/service）、
+ * `ctx.effect`（生命周期托管）；`ctx.inject` 只在真能访问到时使用（沙箱 façade 上读取会抛异常）。
  */
 export function registerPanelRpc(ctx: Context, config: Config): void {
   const endpoints = panelEndpoints(config);
   let dispose: (() => void) | undefined;
+  let registered = false;
 
-  const connectionOf = (): { rpc?: ConnectionRpcLike } | undefined => {
+  const serviceOf = <T>(name: string): T | undefined => {
     const get = (ctx as unknown as { get?: (name: string) => unknown }).get;
     if (typeof get !== 'function') return undefined;
     try {
-      return get.call(ctx, 'connection') as { rpc?: ConnectionRpcLike } | undefined;
+      return get.call(ctx, name) as T | undefined;
     } catch {
       return undefined;
     }
   };
 
-  const tryRegister = (): void => {
-    if (dispose !== undefined) return;
-    const rpc = connectionOf()?.rpc;
-    if (rpc === undefined || typeof rpc.handle !== 'function') return;
+  const registerWith = (webServer: WebServerLike): void => {
+    if (registered) return;
 
-    const handle = async (endpoint: string, payload: unknown): Promise<RpcResultLike> => {
-      const handler = endpoints[endpoint];
-      if (handler === undefined) return fail(`未知端点 ${endpoint}（可用：${Object.keys(endpoints).join(', ')}）`);
+    const handler = async (request: IncomingMessage, response: ServerResponse): Promise<void> => {
       try {
-        const args = payload !== null && typeof payload === 'object' ? (payload as Record<string, unknown>) : {};
-        return ok(await handler(args));
-      } catch (error) {
-        return fail(error instanceof Error ? error.message : String(error));
+        // 鉴权：与市场插件同一套 fence（Host/Origin 白名单 + 浏览器会话）。
+        // 每请求现取 connection，避免注册时它还没就位而整段跳过鉴权。
+        const rejection = serviceOf<ConnectionLike>('connection')?.requestRejection?.(request);
+        if (rejection !== undefined) {
+          response.writeHead(rejection);
+          response.end(rejection === 401 ? 'unauthorized' : 'forbidden');
+          return;
+        }
+        if (!sameOrigin(request)) {
+          response.writeHead(403);
+          response.end('cross-origin request refused');
+          return;
+        }
+        if (request.method !== 'POST') {
+          response.writeHead(405);
+          response.end('method not allowed');
+          return;
+        }
+
+        const pathname = new URL(request.url ?? '/', 'http://127.0.0.1').pathname;
+        const endpoint = pathname.startsWith(`${PANEL_CHANNEL}/`)
+          ? decodeURIComponent(pathname.slice(PANEL_CHANNEL.length + 1))
+          : '';
+        const entry = endpoints[endpoint];
+        if (entry === undefined) {
+          sendJson(response, 404, {
+            type: 'server-response',
+            rpcId: '',
+            result: fail(`未知端点 ${endpoint}（可用：${Object.keys(endpoints).join(', ')}）`),
+          });
+          return;
+        }
+
+        let message: { type?: unknown; rpcId?: unknown; method?: unknown; payload?: unknown } = {};
+        try {
+          const raw = await readBody(request);
+          message = raw === '' ? {} : (JSON.parse(raw) as typeof message);
+        } catch {
+          sendJson(response, 400, { type: 'server-response', rpcId: '', result: fail('请求体不是 JSON') });
+          return;
+        }
+
+        const rpcId = typeof message.rpcId === 'string' ? message.rpcId : '';
+        if (message.type !== 'client-request' || message.method !== endpoint) {
+          sendJson(response, 400, { type: 'server-response', rpcId, result: fail('请求信封非法') });
+          return;
+        }
+
+        const payload =
+          message.payload !== null && typeof message.payload === 'object'
+            ? (message.payload as Record<string, unknown>)
+            : {};
+        let result: RpcResultLike;
+        try {
+          result = ok(await entry(payload));
+        } catch (error) {
+          result = fail(error instanceof Error ? error.message : String(error));
+        }
+        sendJson(response, 200, { type: 'server-response', rpcId, result });
+      } catch {
+        // 响应已结束或 socket 出错：不再二次写头
+        try {
+          response.writeHead(500);
+          response.end('handler failure');
+        } catch {
+          /* 忽略 */
+        }
       }
     };
 
-    // 第三个参数（authority）在 0.2.x 里已被忽略，保留是为了兼容 0.1.x 宿主
-    const disposing = rpc.handle(PANEL_CHANNEL, handle, { authority: 'loopback' });
+    const disposing = webServer.register({ kind: 'prefix', path: PANEL_CHANNEL, handler });
+    registered = true;
     dispose = () => {
-      // handle 返回的是清理函数（调用它才真正撤掉路由），不是 Promise
       try {
         void disposing();
       } catch {
@@ -153,6 +253,7 @@ export function registerPanelRpc(ctx: Context, config: Config): void {
   const cleanup = (): void => {
     dispose?.();
     dispose = undefined;
+    registered = false;
   };
 
   const effect = (ctx as unknown as { effect?: (callback: () => (() => void) | void, label?: string) => unknown })
@@ -163,17 +264,34 @@ export function registerPanelRpc(ctx: Context, config: Config): void {
     process.once('exit', cleanup);
   }
 
-  tryRegister();
-  if (dispose !== undefined) return;
+  const existing = serviceOf<WebServerLike>('webServer');
+  if (existing !== undefined && typeof existing.register === 'function') registerWith(existing);
+  if (registered) return;
 
-  // connection 还没就位（服务注册顺序不保证）：等它出现再注册一次，而不是让面板永远 405
+  // webServer 还没就位：交给 cordis 等服务出现（沙箱 façade 上 ctx.inject 会抛，退回 internal/service 事件）
+  const inject = (ctx as unknown as { inject?: (deps: string[], callback: (scope: Context) => void) => unknown })
+    .inject;
+  if (typeof inject === 'function') {
+    try {
+      inject.call(ctx, ['webServer'], (scope: Context) => {
+        const webServer = (scope as unknown as { webServer?: WebServerLike }).webServer;
+        if (webServer !== undefined && typeof webServer.register === 'function') registerWith(webServer);
+      });
+      return;
+    } catch {
+      /* façade：没有 inject，走下面的 on */
+    }
+  }
+
   const on = (ctx as unknown as { on?: (event: string, callback: (...args: unknown[]) => void) => unknown }).on;
   if (typeof on === 'function') {
     on.call(ctx, 'internal/service', (name: unknown) => {
-      if (name === 'connection') tryRegister();
+      if (name !== 'webServer') return;
+      const webServer = serviceOf<WebServerLike>('webServer');
+      if (webServer !== undefined && typeof webServer.register === 'function') registerWith(webServer);
     });
     return;
   }
 
-  console.warn('windows-c-cleanup: 当前宿主没有 connection.rpc，清理面板未注册（模型工具不受影响）');
+  console.warn('windows-c-cleanup: 当前宿主没有 webServer 服务，清理面板未注册（模型工具不受影响）');
 }
