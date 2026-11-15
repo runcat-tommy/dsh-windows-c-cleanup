@@ -8,6 +8,7 @@
  *     锁定文件导致的「部分删除」单独记 `partial`，需要管理员权限的记 `needs-elevation`。
  */
 import type { RuleIndex } from '../rules/match.js';
+import { promises as fsp } from 'node:fs';
 import { freeSpaceOf } from '../scanner/drives.js';
 import { measurePath } from '../scanner/size.js';
 import { driveRoot } from '../util/drive.js';
@@ -98,6 +99,16 @@ function needsElevation(target: string, windir: string, programData: string): bo
     (windir.length > 0 && normalized.startsWith(windir.toLowerCase())) ||
     (programData.length > 0 && normalized.startsWith(programData.toLowerCase()))
   );
+}
+
+/** 提权任务结束后用它核对目标是否真的消失了（而不是默认成功） */
+async function pathExists(target: string): Promise<boolean> {
+  try {
+    await fsp.lstat(target);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function isRecycleBinTarget(target: string, systemDrive: string): boolean {
@@ -307,6 +318,23 @@ export async function executeCleanup(request: ExecuteRequest): Promise<ExecuteRe
       });
     }
     if (elevation.errors.length > 0) errors.push(...elevation.errors);
+    // 提权返回后按文件系统的真实状态结算。原实现只在用户取消时改写条目，
+    // 其余情况条目停留在 needs-elevation，面板与报告看起来像已处理。
+    if (!elevation.canceled) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.action !== 'needs-elevation') continue;
+        if (await pathExists(item.path)) {
+          item.action = 'partial';
+          item.reason = pick(locale, '提权任务已执行但仍有残留（可能被占用）', 'Elevated task ran but files remain (possibly in use)');
+        } else {
+          item.action = 'deleted';
+          item.reason = pick(locale, '已通过提权删除', 'Deleted with administrator rights');
+          item.freedBytes = item.sizeBefore ?? 0;
+        }
+        request.onItem?.(item, i);
+      }
+    }
   } else if (request.dryRun && elevationTasks.length > 0) {
     log(
       pick(

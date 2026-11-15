@@ -11,7 +11,23 @@
  *   2) 同长度时 protected 胜出；
  *   3) 再相同则按规则库中的先后顺序（先者胜）。
  */
+import { realpathSync } from 'node:fs';
 import type { Grade, Rule } from './schema.js';
+
+/**
+ * 把 8.3 短名（如 C:\Users\ABC~1\...）还原成真实长路径。
+ *
+ * 规则模板里的 %TEMP% 由 expandTemplate() 展开，取的是 process.env.TEMP；
+ * 在用户名含中文等情况下该值是 8.3 短名，而调用方与扫描器给出的是长名。
+ * 两侧纯字符串比较永远不相等，合法目录会被「未收录」原则误拒。
+ */
+function canonical(p: string): string {
+  try {
+    return realpathSync.native(p);
+  } catch {
+    return p;
+  }
+}
 
 /** 模板占位符 → 环境变量名（大小写不敏感） */
 const ENV_ALIAS: Record<string, string> = {
@@ -100,7 +116,7 @@ export interface RuleIndex {
 
 export function buildRuleIndex(rules: Rule[], env: NodeJS.ProcessEnv = process.env): RuleIndex {
   return {
-    entries: rules.map((rule, order) => ({ rule, expanded: expandTemplate(rule.path, env), order })),
+    entries: rules.map((rule, order) => ({ rule, expanded: canonical(expandTemplate(rule.path, env)), order })),
   };
 }
 
@@ -120,9 +136,10 @@ export interface Winner {
 
 /** 在所有规则中挑选最具体的一条（同长度时 protected 优先，再按规则库顺序） */
 export function pickWinner(candidatePath: string, index: RuleIndex): Winner | undefined {
+  const candidate = canonical(candidatePath);
   let best: (Winner & { priority: number; order: number }) | undefined;
   for (const entry of index.entries) {
-    const { matched, specificity } = matchRule(candidatePath, entry.rule, entry.expanded);
+    const { matched, specificity } = matchRule(candidate, entry.rule, entry.expanded);
     if (!matched) continue;
     const priority = GRADE_PRIORITY[entry.rule.grade] ?? 0;
     if (
