@@ -84,7 +84,10 @@ export async function runElevated(
   }
   body.push('Log "=== 全部任务结束 ==="');
 
-  await fs.writeFile(scriptPath, body.join('\n'), 'utf8');
+  // Windows PowerShell 5.1 对「无 BOM」的脚本文件按 ANSI 解码；正文含中文时，
+  // 多字节序列可能把结尾引号吞掉，导致整篇解析失败（ACP=936 的机器必现）。
+  // 写入 UTF-8 BOM 让 5.1 按 UTF-8 读取。
+  await fs.writeFile(scriptPath, '\uFEFF' + body.join('\n'), 'utf8');
 
   const command = [
     'Start-Process',
@@ -124,8 +127,18 @@ export async function runElevated(
   try {
     const log = await fs.readFile(logPath, 'utf8');
     result.logTail = log.split('\n').slice(-25).join('\n');
+    // 日志存在但内容为空：脚本没有执行完，不能当成成功
+    if (!result.canceled && log.trim() === '') {
+      result.attempted = false;
+      result.errors.push('提权脚本未产生日志内容（可能未被正确解析执行）');
+    }
   } catch {
-    /* 脚本可能未运行（用户取消） */
+    // 日志文件不存在：脚本根本没跑起来。此前这里被静默吞掉，调用方只看
+    // Start-Process 的退出码就当成成功，于是失败被掩盖成「退出码 0」。
+    if (!result.canceled) {
+      result.attempted = false;
+      result.errors.push('提权脚本未产生日志文件（可能未被正确解析执行）');
+    }
   }
 
   return result;
